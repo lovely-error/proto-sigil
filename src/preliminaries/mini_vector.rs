@@ -5,7 +5,7 @@ use std::mem::{MaybeUninit, size_of, align_of};
 use std::alloc::{alloc, Layout, dealloc};
 
 
-#[derive(Debug)] //#[repr(packed)]
+#[derive(Debug)]
 pub struct InlineVector<const stack_size : usize, Item> {
   pub stack: [MaybeUninit<Item> ; stack_size],
   pub heap: *mut Item,
@@ -96,7 +96,7 @@ impl<const n : usize, T> InlineVector<n, T> {
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;
   }
-  pub fn copy_content_into(&self, target: *mut T) { unsafe {
+  pub fn move_content_into(self, target: *mut T) { unsafe {
     copy_nonoverlapping(
       self.stack.as_ptr(), target.cast(), n);
     if self.did_allocate_on_heap() {

@@ -51,7 +51,7 @@ fn copying_works() {
   }
   assert!(iv.count() == 4);
   let mut p : [u16 ; 4] = [0;4];
-  iv.copy_content_into(p.as_mut_ptr());
+  iv.move_content_into(p.as_mut_ptr());
   //println!("{:#?}", p);
   assert!(p == [u16::MAX ; 4]);
 }

@@ -284,7 +284,7 @@ impl ParsingState<'_> {
         MaybeUninit::<AppNodeArgsInline>::uninit();
       let ptr = data.assume_init_mut();
       ptr.name = root;
-      subexprs.copy_content_into(ptr.args.as_mut_ptr());
+      subexprs.move_content_into(ptr.args.as_mut_ptr());
       this_node_ptr.cast::<AppNodeArgsInline>().write(data.assume_init());
       let expr_ptr = ExprPtr::init_app_node(
         RawKind::App_ArgsInline, this_node_ptr, count as usize);
@@ -292,7 +292,7 @@ impl ParsingState<'_> {
     };
     if count <= (NodeSizeInBytes / size_of::<ExprPtr>()) as u32 {
       let invocation_data = (*self.node_allocator_ptr).get_slot();
-      subexprs.copy_content_into(invocation_data.cast());
+      subexprs.move_content_into(invocation_data.cast());
       let ptr_to_arg_ptrs = EntangledPtr::from_ptr_pair(
         this_node_ptr, invocation_data)
         .expect("Values should be close enough");
@@ -306,7 +306,7 @@ impl ParsingState<'_> {
     };
     let mut args = Vec::new();
     args.reserve_exact(count as usize);
-    subexprs.copy_content_into(args.as_mut_ptr());
+    subexprs.move_content_into(args.as_mut_ptr());
     let node_ptr = &mut *this_node_ptr.cast::<AppNodeVec>();
     node_ptr.name = root;
     node_ptr.args = args;
