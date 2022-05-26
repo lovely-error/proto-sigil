@@ -1,7 +1,7 @@
 
 use std::intrinsics::copy_nonoverlapping;
 use std::marker::PhantomData;
-use std::mem::{MaybeUninit, size_of, align_of};
+use std::mem::{MaybeUninit, size_of, align_of, forget};
 use std::alloc::{alloc, Layout, dealloc};
 
 
@@ -90,7 +90,7 @@ impl<const n : usize, T> InlineVector<n, T> {
   pub fn is_empty(&self) -> bool {
     return self.ptr == 0;
   }
-  pub fn count(&self) -> u32 {
+  pub fn count_items(&self) -> u32 {
     return self.ptr;
   }
   pub fn did_allocate_on_heap(&self) -> bool {
@@ -105,6 +105,7 @@ impl<const n : usize, T> InlineVector<n, T> {
         target.add(n),
         self.ptr as usize - n);
     }
+    //forget(self.stack);
   } }
 }
 
@@ -113,12 +114,6 @@ impl<const n : usize, T> InlineVector<n, T> {
 impl<const n : usize, T> Drop for InlineVector<n, T> {
   fn drop(&mut self) { unsafe {
     if self.did_allocate_on_heap() {
-      // TBD: Not needed cus Self own T ???
-      // let amount = self.ptr as usize - n;
-      // let ptr = data;
-      // for i in 0 .. amount {
-      //   ptr.add(i).drop_in_place();
-      // }
       let layout =
         Layout::from_size_align_unchecked(
           size_of::<T>() * self.heap_capacity as usize,

@@ -49,7 +49,7 @@ fn copying_works() {
   for _ in 0 .. 4 {
     iv.append(u16::MAX);
   }
-  assert!(iv.count() == 4);
+  assert!(iv.count_items() == 4);
   let mut p : [u16 ; 4] = [0;4];
   iv.move_content_into(p.as_mut_ptr());
   //println!("{:#?}", p);

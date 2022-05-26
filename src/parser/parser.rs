@@ -3,13 +3,14 @@ use std::intrinsics::{transmute, copy_nonoverlapping};
 use std::mem::{MaybeUninit, size_of};
 use std::ptr::{addr_of_mut, addr_of};
 
+
 use crate::{
   monic, monic_unfolding_loop, emit, throw, guard
 };
 use crate::preliminaries::monad::{
   Transient, init_with_aux_gen_ctx_intro,
   fail_with_aux_gen_ctx_intro};
-use crate::parser::node_allocator::NodeSizeInBytes;
+use crate::parser::node_allocator::NodeSlabSizeInBytes;
 
 
 pub struct ParsingState<'chars> {
@@ -18,7 +19,7 @@ pub struct ParsingState<'chars> {
   pub byte_index: usize,
     // Todo: figure out how to expose fields to testing code
   line_number: u32,
-  node_allocator_ptr: *mut Pager<NodeSizeInBytes>,
+  node_allocator_ptr: *mut Pager<NodeSlabSizeInBytes>,
   total_char_count: u32,
 }
 
@@ -60,8 +61,8 @@ pub mod symbol {
 
 #[derive(Debug)]
 pub enum ParseErrorKind {
-  UnrecognisedCharacter(char), EmptySymbol, TooLongSymbol,
-  UnterminatedSubexpr
+  UnrecognisedCharacter, EmptySymbol, TooLongSymbol,
+  UnterminatedSubexpr, UnexpectedCharacter
 }
 #[derive(Debug)]
 pub struct ParseError {
@@ -147,15 +148,15 @@ impl ParsingState<'_> {
     })
   }
   pub fn probe_depth(&mut self) -> u32 {
-    let mut start = self.total_char_count;
+    let mut start = self.byte_index;
     loop {
       self.skip_whitespaces();
       if self.get_current_char() == '\n' {
         self.next_char();
-        start = self.total_char_count;
+        start = self.byte_index;
       } else { break };
     }
-    return self.total_char_count - start;
+    return (self.byte_index - start) as u32;
   }
   pub fn prefix_match(&mut self, pattern: &str, should_strip: bool) -> bool {
     let chkpt = self.make_state_snapshot();
@@ -183,7 +184,7 @@ impl ParsingState<'_> {
     return char == ':' || char == ')' ||
            char == '|' || char == ',' ||
            char == ']' || char == '}' ||
-           char == EOT ;
+           char == EOT || char == '=' ;
   }
 }
 
@@ -225,7 +226,7 @@ impl ParsingState<'_> {
 
 
 use crate::trees::raw_syntax_nodes::{
-  RawKind, RefNode, AppNodeArgsInline, AppNodeIndirectSmall, SourceLocation, AppNodeVec, ExprPtr};
+  RawKind, RefNode, AppNodeArgsInline, AppNodeIndirectSmall, SourceLocation, AppNodeVec, ExprPtr, PatternExprPtr, CompoundPatternNode_ArgsInline, RefPatternNode, CompoundPatternNode_ArgsIndiSlab, RewriteRule, Definition, DeclPtr, Mapping};
 use crate::preliminaries::mini_vector::InlineVector;
 use super::node_allocator::{Pager, EntangledPtr};
 
@@ -236,16 +237,19 @@ impl ParsingState<'_> {
     &mut self,
     root_indentation_depth: u32
   ) -> Maybe<ExprPtr> { unsafe {
+    if self.prefix_match("\\{", false) {
+      let lambda = self.parse_lambda()?;
+      return Ok(lambda);
+    }
     let root = self.parse_symbol()?;
-    let this_node_ptr =
-      (*self.node_allocator_ptr).get_slot();
     let mut subexprs =
       InlineVector::<4, ExprPtr>::init();
     loop {
       self.skip_whitespaces();
       if self.prefix_match("\n", true) {
         let depth = self.probe_depth();
-        if depth <= root_indentation_depth { break };
+        if depth <= root_indentation_depth {
+          self.byte_index -= depth as usize; break };
       }
       if self.at_terminator() { break; }
       if self.prefix_match("(", true) {
@@ -269,6 +273,8 @@ impl ParsingState<'_> {
           let expr_ptr = ExprPtr::init(RawKind::Ref, mem_ptr);
           subexprs.append(expr_ptr);
     };
+    let this_node_ptr =
+      (*self.node_allocator_ptr).get_slot();
     if subexprs.is_empty() {
       let subexpr = RefNode {
         name: root,
@@ -278,7 +284,7 @@ impl ParsingState<'_> {
       let expr_ptr = ExprPtr::init(RawKind::Ref, this_node_ptr);
       return Ok(expr_ptr);
     };
-    let count = subexprs.count();
+    let count = subexprs.count_items();
     if count <= 4 {
       let mut data =
         MaybeUninit::<AppNodeArgsInline>::uninit();
@@ -286,11 +292,11 @@ impl ParsingState<'_> {
       ptr.name = root;
       subexprs.move_content_into(ptr.args.as_mut_ptr());
       this_node_ptr.cast::<AppNodeArgsInline>().write(data.assume_init());
-      let expr_ptr = ExprPtr::init_app_node(
+      let expr_ptr = ExprPtr::init_counted_node(
         RawKind::App_ArgsInline, this_node_ptr, count as usize);
       return Ok(expr_ptr);
     };
-    if count <= (NodeSizeInBytes / size_of::<ExprPtr>()) as u32 {
+    if count <= (NodeSlabSizeInBytes / size_of::<ExprPtr>()) as u32 {
       let invocation_data = (*self.node_allocator_ptr).get_slot();
       subexprs.move_content_into(invocation_data.cast());
       let ptr_to_arg_ptrs = EntangledPtr::from_ptr_pair(
@@ -300,19 +306,218 @@ impl ParsingState<'_> {
         &mut *this_node_ptr.cast::<AppNodeIndirectSmall>();
       node.name = root;
       node.args = ptr_to_arg_ptrs;
-      let expr_ptr = ExprPtr::init_app_node(
+      let expr_ptr = ExprPtr::init_counted_node(
         RawKind::App_ArgsInSlab, this_node_ptr, count as usize);
       return Ok(expr_ptr);
     };
-    let mut args = Vec::new();
-    args.reserve_exact(count as usize);
-    subexprs.move_content_into(args.as_mut_ptr());
-    let node_ptr = &mut *this_node_ptr.cast::<AppNodeVec>();
-    node_ptr.name = root;
-    node_ptr.args = args;
-    let expr_ptr = ExprPtr::init_app_node(
-      RawKind::App_ArgsInVec, this_node_ptr, count as usize);
 
-    return Ok(expr_ptr);
+    todo!("too many args :)");
   } }
+}
+
+
+impl ParsingState<'_> {
+  pub fn parse_lambda(&mut self) -> Maybe<ExprPtr> { unsafe {
+    guard! {
+      self.prefix_match("\\{", true)
+        => self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    };
+    let mut depth = self.probe_depth();
+    let slab = (*self.node_allocator_ptr).get_slot();
+    let mut clauses =
+      InlineVector::<4, EntangledPtr>::init();
+    loop {
+      let clause = self.parse_clause(
+        depth)?;
+      let ptr = EntangledPtr::from_ptr_pair(
+        slab, clause.cast()).unwrap();
+      clauses.append(ptr);
+      depth = self.probe_depth();
+      if self.prefix_match("}", true) { break; }
+    }
+    let count = clauses.count_items();
+    if count as usize <= NodeSlabSizeInBytes / size_of::<EntangledPtr>() {
+      let arg_slab = (*self.node_allocator_ptr).get_slot();
+      clauses.move_content_into(arg_slab.cast());
+      let node_ptr =
+        ExprPtr::init_counted_node(
+          RawKind::Lam, slab, count as usize);
+      return Ok(node_ptr);
+    }
+
+    todo!()
+  } }
+  pub fn parse_clause(
+    &mut self, indentation_depth: u32
+  ) -> Maybe<*mut RewriteRule> { unsafe {
+    guard! {
+      self.prefix_match("|", true)
+        => self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    };
+    let mut patterns =
+      InlineVector::<4, PatternExprPtr>::init();
+    loop {
+      self.skip_delimiters();
+      let pattern = self.parse_pattern()?;
+      patterns.append(pattern);
+      self.skip_delimiters();
+      if self.prefix_match(",", true) {
+        continue; }
+      if self.prefix_match("=>", true) {
+        self.skip_whitespaces(); break; }
+      throw!(self.fail_with(ParseErrorKind::UnexpectedCharacter));
+    }
+    let depth = self.probe_depth();
+    let stencil = self.parse_expr(
+      if depth == 0 { indentation_depth }
+                              else { depth } )?;
+
+    let count = patterns.count_items();
+    let pats = (*self.node_allocator_ptr).get_slot();
+    patterns.move_content_into(pats.cast());
+
+    if count as usize <= NodeSlabSizeInBytes / size_of::<PatternExprPtr>() {
+      let slab = (*self.node_allocator_ptr).get_slot();
+      let data = &mut *slab.cast::<RewriteRule>();
+      data.pattern_count = count as u16;
+      data.patterns = EntangledPtr::from_ptr_pair(
+        slab, pats).unwrap();
+      data.stencil = stencil;
+      return Ok(slab.cast());
+    }
+    todo!()
+  } }
+  pub fn parse_pattern(&mut self) -> Maybe<PatternExprPtr> { unsafe {
+    if self.prefix_match("_", true) {
+      let wk = PatternExprPtr::init_wildcard();
+      return Ok(wk);
+    }
+    let root = self.parse_symbol()?;
+    let mut args =
+      InlineVector::<4, PatternExprPtr>::init();
+    loop {
+      self.skip_delimiters();
+      if self.at_terminator() { break; }
+      if self.prefix_match("(", true) {
+        let sub_pat = self.parse_pattern()?;
+        args.append(sub_pat);
+        self.skip_delimiters();
+        guard! {
+          self.prefix_match(")", true)
+          => self.fail_with(ParseErrorKind::UnexpectedCharacter)
+        }
+        continue;
+      }
+      let terminal_pat = self.parse_symbol()?;
+      let slab = (*self.node_allocator_ptr).get_slot();
+      let node = &mut *slab.cast::<RefPatternNode>();
+      node.name = terminal_pat;
+      let expr = PatternExprPtr::init_singular(slab);
+      args.append(expr);
+    }
+    let slab = (*self.node_allocator_ptr).get_slot();
+    if args.is_empty() {
+      let data =
+        &mut *slab.cast::<RefPatternNode>();
+      data.name = root;
+      let var = PatternExprPtr::init_singular(slab);
+      return Ok(var);
+    }
+    let count = args.count_items();
+    if count <= 4 {
+      let data =
+        &mut *slab.cast::<CompoundPatternNode_ArgsInline>();
+      data.name = root;
+      args.move_content_into(data.args.as_mut_ptr());
+      let comp =
+        PatternExprPtr::init_compound_inlined(
+          slab, count as u8);
+      return Ok(comp);
+    }
+    if count <= (NodeSlabSizeInBytes / size_of::<PatternExprPtr>()) as u32 {
+      let indi_args = (*self.node_allocator_ptr).get_slot();
+      args.move_content_into(indi_args.cast());
+      let data =
+        &mut *slab.cast::<CompoundPatternNode_ArgsIndiSlab>();
+      data.name = root;
+      data.args =
+        EntangledPtr::from_ptr_pair(
+          slab, indi_args).unwrap();
+      let pat_node_ptr = PatternExprPtr::init_compound_indirect(
+        slab, count as u8);
+      return Ok(pat_node_ptr);
+    }
+    todo!()
+  } }
+}
+
+
+impl ParsingState<'_> {
+  pub fn parse_decl(&mut self) -> Maybe<DeclPtr> {
+    let name = self.parse_symbol()?;
+    self.skip_delimiters();
+    guard! {
+      self.prefix_match(":", true) =>
+      self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    }
+    let depth = self.probe_depth();
+    let type_ =
+      self.parse_expr(depth)?;
+    let mut depth = self.probe_depth();
+    if self.prefix_match("=", true) {
+      depth = self.probe_depth();
+      let value = self.parse_expr(depth)?;
+      unsafe {
+        let slab = (*self.node_allocator_ptr).get_slot();
+        let data =
+          &mut *slab.cast::<Definition>();
+        data.name = name;
+        data.type_ = type_;
+        data.value = value;
+        let def_ptr = DeclPtr::init_def(slab);
+        return Ok(def_ptr);
+      }
+    }
+    if self.prefix_match("|", false) {
+      let mut clauses =
+        InlineVector::<4, *mut RewriteRule>::init();
+      loop {
+        let clause =
+          self.parse_clause(depth)?;
+        clauses.append(clause);
+        depth = self.probe_depth();
+        if self.prefix_match("|", false) { continue; }
+        else { self.byte_index -= depth as usize; break; }
+      }
+      let count = clauses.count_items();
+      if count as usize <=
+      NodeSlabSizeInBytes / size_of::<EntangledPtr>() { unsafe {
+        let slab = (*self.node_allocator_ptr).get_slot();
+        let slab_ = slab.cast::<EntangledPtr>();
+        for i in 0 .. count {
+          let rr_ptr = clauses.get_ref(i);
+          let entp =
+            EntangledPtr::from_ptr_pair(
+              slab, (*rr_ptr).cast()).unwrap();
+          *slab_.add(i as usize) = entp;
+        }
+        let map_decl_ptr = (*self.node_allocator_ptr).get_slot();
+        let data = &mut *map_decl_ptr.cast::<Mapping>();
+        data.name = name;
+        data.type_ = type_;
+        let rel_ptr =
+          EntangledPtr::from_ptr_pair(
+            map_decl_ptr, slab.cast()).unwrap();
+        data.clauses = rel_ptr;
+        let map_decl = DeclPtr::init_map(
+          map_decl_ptr, count as u8);
+        return Ok(map_decl);
+      } }
+      todo!()
+    }
+    throw!(self.fail_with(ParseErrorKind::UnexpectedCharacter));
+  }
+  pub fn run_parsing(&mut self) -> Maybe<Vec<()>> {
+    todo!()
+  }
 }

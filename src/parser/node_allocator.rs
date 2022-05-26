@@ -5,9 +5,9 @@ use std::{alloc::{Layout, alloc, dealloc}, mem::size_of};
 const Page4K : Layout = unsafe {
   Layout::from_size_align_unchecked(4096, 1) } ;
 
-pub const NodeSizeInBytes : usize = 64;
+pub const NodeSlabSizeInBytes : usize = 64;
 
-const NodePageCapacity : u16 = 4096 / NodeSizeInBytes as u16 ;
+const NodePageCapacity : u16 = 4096 / NodeSlabSizeInBytes as u16 ;
 
 
 #[derive(Debug, Copy, Clone)]

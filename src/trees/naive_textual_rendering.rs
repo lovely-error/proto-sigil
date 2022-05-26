@@ -3,7 +3,8 @@ use crate::parser::{
   parser::symbol::{Repr, Symbol},
   node_allocator::EntangledPtr};
 use super::raw_syntax_nodes::{
-  RawKind, RefNode, AppNodeIndirectSmall, ExprPtr, AppNodeArgsInline};
+  RawKind, RefNode, AppNodeIndirectSmall, ExprPtr, AppNodeArgsInline,
+  PatternExprPtr, PatternKind, CompoundPatternNode_ArgsIndiSlab, CompoundPatternNode_ArgsInline, RefPatternNode};
 
 
 pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
@@ -84,3 +85,40 @@ fn write_symbol(symbol: Symbol, output: &mut String) {
     },
   }
 }
+
+pub fn render_pattern_tree(
+  node_ptr: PatternExprPtr, output: &mut String
+) { unsafe {
+  let kind = node_ptr.project_tag();
+  let ptr = node_ptr.project_ptr();
+  match kind {
+    PatternKind::Wildcard => {
+      output.push('_');
+    },
+    PatternKind::Compound_Inlined => {
+      output.push('(');
+      let node =
+        *ptr.cast::<CompoundPatternNode_ArgsInline>();
+      write_symbol(node.name, output);
+      output.push_str(" [");
+      let count = node_ptr.project_count();
+      let limit = count - 1;
+      for i in 0 .. count {
+        let arg = node.args.get_unchecked(i as usize);
+        render_pattern_tree(*arg, output);
+        if i != limit {
+          output.push(' ');
+        }
+      }
+      output.push_str("])");
+    },
+    PatternKind::Compound_Indi => {
+
+    },
+    PatternKind::Compound_Huge => todo!(),
+    PatternKind::Singular => {
+      let node = *ptr.cast::<RefPatternNode>();
+      write_symbol(node.name, output);
+    },
+  }
+} }

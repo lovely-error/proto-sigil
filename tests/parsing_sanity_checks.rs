@@ -1,10 +1,10 @@
 use proto_sigil::{parser::{
   parser::{
     ParsingState, symbol::{Symbol, Repr}},
-    node_allocator::{Pager, NodeSizeInBytes}},
+    node_allocator::{Pager, NodeSlabSizeInBytes}},
   trees::{raw_syntax_nodes::{
     RefNode,  RawKind},
-    naive_textual_rendering::render_expr_tree}};
+    naive_textual_rendering::{render_expr_tree, render_pattern_tree}}};
 use std::mem::size_of;
 extern crate proto_sigil;
 
@@ -81,7 +81,7 @@ fn depth_probing_works() {
 #[test]
 fn trivial_expr() {
   let example_text = "A";
-  let mut alloc = Pager::<NodeSizeInBytes>::init();
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
       example_text.as_bytes(),
@@ -97,8 +97,8 @@ fn trivial_expr() {
 
 #[test]
 fn basic_expr() {
-  let example_text = "A (B C) D (E F G)";
-  let mut alloc = Pager::<NodeSizeInBytes>::init();
+  let example_text = "A (B C) \n D (E F G)";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
       example_text.as_bytes(),
@@ -125,4 +125,82 @@ fn basic_expr() {
       panic!("Unexpected failure");
     },
   }
+}
+
+#[test]
+fn basic_pattern_expr() {
+  let example_text = "A (B _ _) (C _ (D E))";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes(),
+      &mut alloc);
+  let pattern =
+    ps.parse_pattern().unwrap();
+  let mut str = String::new();
+  render_pattern_tree(pattern, &mut str);
+  println!("{}", str);
+}
+
+
+#[test]
+fn clause () {
+  let example_text =
+    "| A (B _ _), C _ (D E) => A (B C) D (E F G)";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes(),
+      &mut alloc);
+  let clause =
+    ps.parse_clause(0);
+  println!("{:#?}", clause);
+}
+
+#[test]
+fn lambda () {
+  let example_text =
+    "\\{\n".to_string() +
+    "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
+    "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes(),
+      &mut alloc);
+  let clause =
+    ps.parse_lambda();
+  println!("{:#?}", clause);
+}
+
+
+#[test]
+fn decl_parsing () {
+  let example_text =
+    "example : Either A B = \\{\n".to_string() +
+    "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
+    "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes(),
+      &mut alloc);
+  let def = ps.parse_decl().unwrap();
+  println!("{:#?}", def.project_tag());
+}
+
+
+#[test]
+fn map_parsing () {
+  let example_text =
+    "example : Either A B \n".to_string() +
+    "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
+    "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
+  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes(),
+      &mut alloc);
+  let def = ps.parse_decl().unwrap();
+  println!("{:#?}", def.project_tag());
 }
