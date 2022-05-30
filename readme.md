@@ -1,6 +1,6 @@
 # Sigil
 ~~Blazing fast~~ tool for programm construction, based on rewriting system that realise multilevel introspection. Or what lamers call dependently typed fp lang.
-This thing is going to be a fusion between imperative and functional.
+The intntion is to build a lang that is a mix of deptyped fp and imperative features. All of it should run on VM.
 ## Roadmap
 ### Stage 0.
 1. [_] Finalise parser to match grammar spec
@@ -22,3 +22,5 @@ This thing is going to be a fusion between imperative and functional.
 1. [_] VM APIs
     1. [_] Networking
     1. [_] FS
+    1. [_] IPC
+    1. [_] Acceleration primitives (?)
