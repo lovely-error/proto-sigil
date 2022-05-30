@@ -1,14 +1,8 @@
 
-use std::{ptr::{addr_of_mut, addr_of}, intrinsics::transmute};
+use std::{intrinsics::transmute};
 
 use crate::parser::{
   node_allocator::EntangledPtr, parser::symbol::Symbol};
-
-
-pub struct SourceLocation {
-  primary_offset: u32,
-  secondary_offset: u32
-}
 
 
 #[repr(u8)] #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,7 +25,9 @@ impl ExprPtr {
     let val = ((ptr as u64) << 8) + kind as u64;
     return Self(val);
   }
-  pub fn init_counted_node(kind: RawKind, ptr: *mut (), arg_num:usize) -> Self {
+  pub fn init_counted_node(
+    kind: RawKind, ptr: *mut (), arg_num:usize
+  ) -> Self {
     if arg_num > u8::MAX as usize { panic!("Too many args has been given") }
     let mut val = (ptr as u64) << 8;
     val += arg_num as u64;
@@ -46,7 +42,9 @@ impl ExprPtr {
     if let RawKind::App_ArgsInline |
            RawKind::App_ArgsInVec |
            RawKind::Lam |
-           RawKind::App_ArgsInSlab = self.project_tag() {
+           RawKind::App_ArgsInSlab |
+           RawKind::Fun |
+           RawKind::Sig = self.project_tag() {
       return (self.0 >> 16) as *mut _ ;
     };
     return (self.0 >> 8) as *mut _ ;
@@ -59,12 +57,6 @@ impl ExprPtr {
 
 // All nontrivial nodes have same layout: 64 bytes
 pub type GenericNodeData = [u64 ; 8];
-
-// Pi and Sigma
-pub struct LiftNode {
-  spine_node: EntangledPtr,
-  sloc_data: SourceLocation,
-}
 
 #[derive(Debug, Copy, Clone)]
 pub struct AppNodeArgsInline {
@@ -96,7 +88,7 @@ pub struct AppNodeVec {
 
 #[repr(u8)]
 pub enum PatternKind {
-  Wildcard, Compound_Inlined, Compound_Indi, Compound_Huge, Singular
+  Wildcard, Compound_Inlined, Compound_Indirect, Compound_Huge, Singular
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -117,7 +109,7 @@ impl PatternExprPtr {
     let mut ptr = (node_ptr as u64) << 8;
     ptr += arg_count as u64;
     ptr = ptr << 8;
-    ptr += PatternKind::Compound_Indi as u64;
+    ptr += PatternKind::Compound_Indirect as u64;
     return Self(ptr);
   }
   pub fn init_singular(node_ptr: *mut ()) -> Self {
@@ -128,7 +120,7 @@ impl PatternExprPtr {
   pub fn project_ptr(&self) -> *mut () {
     let kind = self.project_tag();
     if let PatternKind::Compound_Inlined |
-           PatternKind::Compound_Indi = kind {
+           PatternKind::Compound_Indirect = kind {
       return (self.0 >> 16) as *mut _
     }
     return (self.0 >> 8) as *mut _
@@ -215,4 +207,42 @@ pub struct Mapping {
   pub name: Symbol,
   pub type_: ExprPtr,
   pub clauses: EntangledPtr
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum LiftNodeKind {
+  Sigma, Pi
+}
+#[derive(Debug, Clone, Copy)]
+pub struct LiftNodePtr(u64);
+impl LiftNodePtr {
+  pub fn init_sigma(node_ptr: *mut (), arg_count: u8) -> Self {
+    let ptr =
+      ((((node_ptr as u64) << 8) + (arg_count as u64)) << 8)
+      + LiftNodeKind::Sigma as u64;
+    return Self(ptr);
+  }
+  pub fn init_pi(node_ptr: *mut (), arg_count: u8) -> Self {
+    let ptr =
+      ((((node_ptr as u64) << 8) + (arg_count as u64)) << 8)
+      + LiftNodeKind::Pi as u64;
+    return Self(ptr);
+  }
+  pub fn project_ptr(&self) -> *mut () {
+    (self.0 >> 16) as *mut _
+  }
+  pub fn project_count(&self) -> u8 {
+    unsafe { transmute((self.0 >> 8) as u8) }
+  }
+}
+#[derive(Debug, Clone, Copy)]
+pub struct LiftNode {
+  pub spine_expr: ExprPtr,
+  pub head: EntangledPtr,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LiftNodeItem {
+  pub name: Option<Symbol>,
+  pub val: ExprPtr,
 }

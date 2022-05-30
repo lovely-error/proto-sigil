@@ -1,8 +1,13 @@
 
 use std::mem::size_of;
 
-use proto_sigil::trees::raw_syntax_nodes::{AppNodeArgsInline, AppNodeVec};
+use proto_sigil::{trees::raw_syntax_nodes::{
+  AppNodeArgsInline, AppNodeVec, LiftNodeItem}, parser::parser::symbol::Symbol};
 
+#[test]
+fn size_of_symbol_is_8_bytes () {
+  assert!(size_of::<Symbol>() == 8)
+}
 
 #[test]
 fn size_test1 () {
@@ -19,3 +24,7 @@ fn size_test2 () {
   println!("{}", size);
 }
 
+#[test]
+fn size_of_head_item_check () {
+  println!("{}", size_of::<LiftNodeItem>())
+}

@@ -1,26 +1,20 @@
 use proto_sigil::{parser::{
   parser::{
-    ParsingState, symbol::{Symbol, Repr}},
-    node_allocator::{Pager, NodeSlabSizeInBytes}},
+    ParsingState, symbol::{Symbol, Repr}}},
   trees::{raw_syntax_nodes::{
-    RefNode,  RawKind},
-    naive_textual_rendering::{render_expr_tree, render_pattern_tree}}};
-use std::mem::size_of;
+    RefNode,  RawKind, Mapping},
+    naive_textual_rendering::{render_expr_tree, render_pattern}}};
+
 extern crate proto_sigil;
 
 
-#[test]
-fn size_of_symbol_is_8_bytes () {
-  assert!(size_of::<Symbol>() == 8)
-}
 
 #[test]
 fn recognisible_long() {
   let example_text = "aaaaaaaa";
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      0 as *mut _);
+      example_text.as_bytes());
   let smth = ps.parse_symbol();
   //println!("{:#?}", smth);
   match smth {
@@ -36,8 +30,7 @@ fn recognisible_short () {
   let example_text = "aaaaaaa";
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      0 as *mut _);
+      example_text.as_bytes());
   let smth = ps.parse_symbol();
   //println!("{:#?}", smth);
   match smth {
@@ -52,8 +45,7 @@ fn prefix_check_works() {
   let example_text = "aab";
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      0 as *mut _);
+      example_text.as_bytes());
 
   let matches = ps.prefix_match(
     "aab", false);
@@ -71,8 +63,7 @@ fn depth_probing_works() {
   let example_text = "   \n  ";
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      0 as *mut _);
+      example_text.as_bytes());
   let found_depth = ps.probe_depth();
   //println!("{}", found_depth);
   assert!(found_depth == 2);
@@ -81,11 +72,9 @@ fn depth_probing_works() {
 #[test]
 fn trivial_expr() {
   let example_text = "A";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let whatever =
     ps.parse_expr(0);
   println!("{:#?}", whatever);
@@ -98,11 +87,9 @@ fn trivial_expr() {
 #[test]
 fn basic_expr() {
   let example_text = "A (B C) \n D (E F G)";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let app_expr =
     ps.parse_expr(0);
   //println!("{:#?}", app_expr);
@@ -130,15 +117,13 @@ fn basic_expr() {
 #[test]
 fn basic_pattern_expr() {
   let example_text = "A (B _ _) (C _ (D E))";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let pattern =
     ps.parse_pattern().unwrap();
   let mut str = String::new();
-  render_pattern_tree(pattern, &mut str);
+  render_pattern(pattern, &mut str);
   println!("{}", str);
 }
 
@@ -147,11 +132,9 @@ fn basic_pattern_expr() {
 fn clause () {
   let example_text =
     "| A (B _ _), C _ (D E) => A (B C) D (E F G)";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let clause =
     ps.parse_clause(0);
   println!("{:#?}", clause);
@@ -163,11 +146,9 @@ fn lambda () {
     "\\{\n".to_string() +
     "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
     "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let clause =
     ps.parse_lambda();
   println!("{:#?}", clause);
@@ -180,11 +161,9 @@ fn decl_parsing () {
     "example : Either A B = \\{\n".to_string() +
     "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
     "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let def = ps.parse_decl().unwrap();
   println!("{:#?}", def.project_tag());
 }
@@ -196,11 +175,32 @@ fn map_parsing () {
     "example : Either A B \n".to_string() +
     "  | A (B _ _), C _ (D E) => A (B C) \n   D (E F G)\n" +
     "| A (B _ _), C _ (D E) => A (B C) \n  D (E F G) }";
-  let mut alloc = Pager::<NodeSlabSizeInBytes>::init();
   let mut ps =
     ParsingState::init(
-      example_text.as_bytes(),
-      &mut alloc);
+      example_text.as_bytes());
   let def = ps.parse_decl().unwrap();
-  println!("{:#?}", def.project_tag());
+  let val = unsafe { &*def.project_ptr().cast::<Mapping>() };
+  println!("{:#?}", val);
+  let mut thing = String::new();
+  render_expr_tree(val.type_, &mut thing);
+  println!("{:#?}", thing);
 }
+
+#[test]
+fn fun_parsing () {
+  let example_text =
+    "(a : T, K a a) -> (b : D) -> M a b";
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth = ps.parse_lift_node();
+  match smth {
+    Ok(val) => {
+      let mut str = String::new();
+      render_expr_tree(val, &mut str);
+      println!("{}", str);
+    },
+    Err(oops) => println!("{:#?}", oops),
+  }
+}
+

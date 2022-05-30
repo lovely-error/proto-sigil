@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+
+[[bin]]
+name = "knot"
+path = "bin/knot/main.rs"

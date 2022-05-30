@@ -1,13 +1,13 @@
 extern crate proto_sigil;
 
 use proto_sigil::parser::node_allocator::{
-  Pager, NodeSlabSizeInBytes};
+  SlabAllocator, NodeSlabSizeInBytes};
 
 
 #[test]
 fn alloc_happens_at_all() { unsafe {
   let mut alloc =
-    Pager::<NodeSlabSizeInBytes>::init();
+    SlabAllocator::<NodeSlabSizeInBytes>::init();
   //println!("{:#?}", alloc);
   assert!(alloc.current_page == alloc.last_page);
   assert!(alloc.ptr == 1);
@@ -25,7 +25,7 @@ fn alloc_happens_at_all() { unsafe {
 #[test]
 fn usable() {
   let mut alloc =
-    Pager::<NodeSlabSizeInBytes>::init();
+    SlabAllocator::<NodeSlabSizeInBytes>::init();
   for _ in 1 .. NodeSlabSizeInBytes - 1 {
     let _ = alloc.get_slot();
   }

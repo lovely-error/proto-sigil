@@ -30,9 +30,8 @@ impl EntangledPtr {
   } }
 }
 
-// slab allocator
 #[derive(Debug)]
-pub struct Pager<const item_size : usize> {
+pub struct SlabAllocator<const item_size : usize> {
   pub first_page: *mut (),
   pub last_page: *mut (),
   pub current_page: *mut (),
@@ -40,7 +39,7 @@ pub struct Pager<const item_size : usize> {
   pub capacity: u32
 }
 
-impl<const s : usize> Pager<s> {
+impl<const s : usize> SlabAllocator<s> {
   pub fn init() -> Self { unsafe {
     let page = alloc(Page4K).cast::<()>();
     *page.cast::<usize>() = usize::MAX;
@@ -52,7 +51,7 @@ impl<const s : usize> Pager<s> {
   } }
 }
 
-impl<const s : usize> Pager<s> {
+impl<const s : usize> SlabAllocator<s> {
   pub fn get_slot(&mut self) -> *mut () { unsafe {
     let product =
       self.current_page.cast::<[u8;s]>().add(self.ptr as usize).cast();
@@ -68,7 +67,7 @@ impl<const s : usize> Pager<s> {
   } }
 }
 
-impl<const s : usize> Drop for Pager<s> {
+impl<const s : usize> Drop for SlabAllocator<s> {
   fn drop(&mut self) { unsafe {
     dealloc(self.current_page.cast(), Page4K);
     if self.current_page == self.last_page { return (); }

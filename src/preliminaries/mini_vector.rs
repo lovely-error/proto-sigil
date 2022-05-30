@@ -105,7 +105,7 @@ impl<const n : usize, T> InlineVector<n, T> {
         target.add(n),
         self.ptr as usize - n);
     }
-    //forget(self.stack);
+    forget(self);
   } }
 }
 

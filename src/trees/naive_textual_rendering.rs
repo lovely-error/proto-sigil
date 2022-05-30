@@ -4,7 +4,7 @@ use crate::parser::{
   node_allocator::EntangledPtr};
 use super::raw_syntax_nodes::{
   RawKind, RefNode, AppNodeIndirectSmall, ExprPtr, AppNodeArgsInline,
-  PatternExprPtr, PatternKind, CompoundPatternNode_ArgsIndiSlab, CompoundPatternNode_ArgsInline, RefPatternNode};
+  PatternExprPtr, PatternKind, CompoundPatternNode_ArgsIndiSlab, CompoundPatternNode_ArgsInline, RefPatternNode, LiftNode, LiftNodeItem};
 
 
 pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
@@ -13,11 +13,11 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
   match kind {
     RawKind::Ref => {
       let ref_node = *ptr.cast::<RefNode>();
-      write_symbol(ref_node.name, output);
+      write_symbol(&ref_node.name, output);
     },
     RawKind::App_ArgsInSlab => {
       let app_node = *ptr.cast::<AppNodeIndirectSmall>();
-      write_symbol(app_node.name, output);
+      write_symbol(&app_node.name, output);
       output.push_str(" [");
       let count = expr.project_count();
       let ptr = app_node.args.reach_referent_from(ptr);
@@ -36,13 +36,13 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
     RawKind::App_ArgsInline => {
       output.push('(');
       let app_node = *ptr.cast::<AppNodeArgsInline>();
-      write_symbol(app_node.name, output);
+      write_symbol(&app_node.name, output);
       output.push_str(" [");
       let count = expr.project_count();
-      let ptr = app_node.args;
+      let args = &app_node.args;
       let limit = count - 1;
       for i in 0 .. count {
-        let arg = ptr.get_unchecked(i as usize);
+        let arg = args.get_unchecked(i as usize);
         render_expr_tree(*arg, output);
         if i != limit {
           output.push(' ');
@@ -58,15 +58,55 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
       output.push_str(repr);
     },
     RawKind::Wit => todo!(),
-    RawKind::Fun => todo!(),
-    RawKind::Sig => todo!(),
+    RawKind::Fun => {
+      output.push('(');
+      let count = expr.project_count();
+      let node = &*ptr.cast::<LiftNode>();
+      let items =
+        node.head.reach_referent_from(ptr).cast::<LiftNodeItem>();
+      let limit = count - 1;
+      for i in 0 .. count {
+        let item = &*items.add(i as usize);
+        if let Some(ref name) = item.name {
+          write_symbol(name, output);
+          output.push_str(" : ");
+        }
+        render_expr_tree(item.val, output);
+        if i != limit { output.push_str(", ")};
+      }
+      output.push_str(") -> ");
+      output.push('(');
+      render_expr_tree(node.spine_expr, output);
+      output.push(')');
+    },
+    RawKind::Sig => {
+      output.push('(');
+      let count = expr.project_count();
+      let node = &*ptr.cast::<LiftNode>();
+      let items =
+        node.head.reach_referent_from(ptr).cast::<LiftNodeItem>();
+      let limit = count - 1;
+      for i in 0 .. count {
+        let item = &*items.add(i as usize);
+        if let Some(ref name) = item.name {
+          write_symbol(name, output);
+          output.push_str(" : ");
+        }
+        render_expr_tree(item.val, output);
+        if i != limit { output.push_str(", ")};
+      }
+      output.push_str(") |- ");
+      output.push('(');
+      render_expr_tree(node.spine_expr, output);
+      output.push(')');
+    },
     RawKind::Star => {
       output.push('*');
     },
   }
 } }
 
-fn write_symbol(symbol: Symbol, output: &mut String) {
+fn write_symbol(symbol: &Symbol, output: &mut String) {
   match symbol.repr {
     Repr::Inlined(smth) => {
       for char in smth.iter() {
@@ -86,7 +126,7 @@ fn write_symbol(symbol: Symbol, output: &mut String) {
   }
 }
 
-pub fn render_pattern_tree(
+pub fn render_pattern(
   node_ptr: PatternExprPtr, output: &mut String
 ) { unsafe {
   let kind = node_ptr.project_tag();
@@ -99,26 +139,24 @@ pub fn render_pattern_tree(
       output.push('(');
       let node =
         *ptr.cast::<CompoundPatternNode_ArgsInline>();
-      write_symbol(node.name, output);
+      write_symbol(&node.name, output);
       output.push_str(" [");
       let count = node_ptr.project_count();
       let limit = count - 1;
       for i in 0 .. count {
         let arg = node.args.get_unchecked(i as usize);
-        render_pattern_tree(*arg, output);
+        render_pattern(*arg, output);
         if i != limit {
           output.push(' ');
         }
       }
       output.push_str("])");
     },
-    PatternKind::Compound_Indi => {
-
-    },
+    PatternKind::Compound_Indirect => todo!(),
     PatternKind::Compound_Huge => todo!(),
     PatternKind::Singular => {
       let node = *ptr.cast::<RefPatternNode>();
-      write_symbol(node.name, output);
+      write_symbol(&node.name, output);
     },
   }
 } }
