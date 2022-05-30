@@ -1,8 +1,8 @@
 
 mod cli_assist;
+mod parser;
 
 
 fn main () {
-  println!("heyo");
   cli_assist::KnotState::init().run();
 }
