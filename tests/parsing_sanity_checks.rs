@@ -2,7 +2,7 @@ use proto_sigil::{parser::{
   parser::{
     ParsingState, symbol::{Symbol, Repr}}},
   trees::{raw_syntax_nodes::{
-    RefNode,  RawKind, Mapping},
+    RefNode,  RawKind, Mapping, RawCtxPtr},
     naive_textual_rendering::{render_expr_tree, render_pattern}}};
 
 extern crate proto_sigil;
@@ -95,17 +95,10 @@ fn basic_expr() {
   //println!("{:#?}", app_expr);
   match app_expr {
     Ok(expr_ptr) => {
-      let kind = expr_ptr.project_tag();
-      //println!("{:#?}", kind);
-      assert!(kind == RawKind::App_ArgsInline);
-      assert!(kind == RawKind::App_ArgsInline);
-      let arg_count = expr_ptr.project_count();
-      //println!("{}", arg_count);
-      assert!(arg_count == 3);
       let mut thing = String::new();
       render_expr_tree(expr_ptr, &mut thing);
       //println!("{}", thing);
-      assert!(thing == "(A [(B [C]) D (E [F G])])");
+      assert!(thing == "(A [(B [C]), D, (E [F, G])])");
     },
     Err(err) => {
       println!("{:#?}", err);
@@ -193,7 +186,8 @@ fn fun_parsing () {
   let mut ps =
     ParsingState::init(
       example_text.as_bytes());
-  let smth = ps.parse_lift_node();
+  let smth =
+    ps.parse_lift_node(RawCtxPtr::init_null());
   match smth {
     Ok(val) => {
       let mut str = String::new();
@@ -204,3 +198,84 @@ fn fun_parsing () {
   }
 }
 
+#[test]
+fn some_realistic_def() {
+  let example_text =
+    "example : (a : Dot) -> Dot\n".to_string() +
+    "| pt => pt" ;
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth = ps.run_parsing();
+  match smth {
+    Ok(val) => {
+      println!("{:#?}", val);
+    },
+    Err(err) => {
+      println!("{:#?}", err);
+    }
+  }
+}
+
+#[test]
+fn implicits_are_parseable () {
+  let example_text =
+    "{A, B, C : Hui ta} (a : A) -> B" ;
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth =
+    ps.parse_expr(0);
+  match smth {
+    Ok(val) => {
+      let mut str = String::new();
+      render_expr_tree(val, &mut str);
+      println!("{}", str);
+    },
+    Err(err) => {
+      println!("{:#?}", err);
+    }
+  }
+}
+
+#[test]
+fn witness_is_parseable () {
+  let example_text =
+    "[| a b , b c ; c d (e f) |]" ;
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth =
+    ps.parse_expr(0);
+  match smth {
+    Ok(val) => {
+      let mut str = String::new();
+      render_expr_tree(val, &mut str);
+      println!("{}", str);
+    },
+    Err(err) => {
+      println!("{:#?}", err);
+    }
+  }
+}
+
+#[test]
+fn ref_node_with_ctx_is_parseable () {
+  let example_text =
+    "{A} A" ;
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth =
+    ps.parse_expr(0);
+  match smth {
+    Ok(val) => {
+      let mut str = String::new();
+      render_expr_tree(val, &mut str);
+      println!("{}", str);
+    },
+    Err(err) => {
+      println!("{:#?}", err);
+    }
+  }
+}

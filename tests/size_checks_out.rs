@@ -2,7 +2,7 @@
 use std::mem::size_of;
 
 use proto_sigil::{trees::raw_syntax_nodes::{
-  AppNodeArgsInline, AppNodeVec, LiftNodeItem}, parser::parser::symbol::Symbol};
+  AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr}, parser::parser::symbol::Symbol};
 
 #[test]
 fn size_of_symbol_is_8_bytes () {
@@ -27,4 +27,9 @@ fn size_test2 () {
 #[test]
 fn size_of_head_item_check () {
   println!("{}", size_of::<LiftNodeItem>())
+}
+
+#[test]
+fn size_of_imp_ctx_item () {
+  println!("{}", size_of::<(Symbol, Option<ExprPtr>)>());
 }

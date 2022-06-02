@@ -2,7 +2,7 @@
 use std::{intrinsics::transmute};
 
 use crate::parser::{
-  node_allocator::EntangledPtr, parser::symbol::Symbol};
+  node_allocator::EntangledPtr, parser::{symbol::Symbol, SourceLocation}};
 
 
 #[repr(u8)] #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +25,11 @@ impl ExprPtr {
     let val = ((ptr as u64) << 8) + kind as u64;
     return Self(val);
   }
+  pub fn mark_context_presence(&mut self) {
+    self.0 = self.0 | 0x80
+  }
+  pub fn init_null() -> Self { Self(0) }
+  pub fn is_null(&self) -> bool { self.0 == 0 }
   pub fn init_counted_node(
     kind: RawKind, ptr: *mut (), arg_num:usize
   ) -> Self {
@@ -36,7 +41,8 @@ impl ExprPtr {
     return Self(val);
   }
   pub fn project_tag(&self) -> RawKind {
-    unsafe { transmute(self.0 as u8) }
+    let head = self.0 & 0x7F;
+    return unsafe { transmute(head as u8) }
   }
   pub fn project_ptr(&self) -> *mut () {
     if let RawKind::App_ArgsInline |
@@ -44,6 +50,7 @@ impl ExprPtr {
            RawKind::Lam |
            RawKind::App_ArgsInSlab |
            RawKind::Fun |
+           RawKind::Wit |
            RawKind::Sig = self.project_tag() {
       return (self.0 >> 16) as *mut _ ;
     };
@@ -61,21 +68,23 @@ pub type GenericNodeData = [u64 ; 8];
 #[derive(Debug, Copy, Clone)]
 pub struct AppNodeArgsInline {
   pub name: Symbol,
-  //sloc_data: SourceLocation,
-  pub args: [ExprPtr ; 4]
+  pub sloc_data: SourceLocation,
+  pub ctx_ptr: RawCtxPtr,
+  pub args: [ExprPtr ; 2],
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct AppNodeIndirectSmall {
   pub name: Symbol,
-  //sloc_data: SourceLocation,
-  pub args: EntangledPtr
+  pub sloc_data: SourceLocation,
+  pub args: EntangledPtr,
+  pub ctx_ptr: RawCtxPtr,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct RefNode {
   pub name: Symbol,
-  //pub sloc_data: SourceLocation
+  pub ctx_ptr: RawCtxPtr,
 }
 
 
@@ -164,8 +173,6 @@ pub struct Lambda {
 }
 
 
-
-
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum DeclKind {
   Definition, Mapping
@@ -239,10 +246,38 @@ impl LiftNodePtr {
 pub struct LiftNode {
   pub spine_expr: ExprPtr,
   pub head: EntangledPtr,
+  pub ctx_ptr: RawCtxPtr,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct LiftNodeItem {
   pub name: Option<Symbol>,
   pub val: ExprPtr,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawCtxPtr(u64);
+impl RawCtxPtr {
+  pub fn init(item_count: u8, ptr: *mut ()) -> Self {
+    Self(((ptr as u64) << 8) + item_count as u64)
+  }
+  pub fn project_count(&self) -> u8 {
+    unsafe { transmute(self.0 as u8) }
+  }
+  pub fn project_ptr(&self) -> *mut () {
+    (self.0 >> 8) as *mut _
+  }
+  pub fn init_null() -> Self {
+    Self(0)
+  }
+  pub fn is_null(&self) -> bool {
+    self.0 == 0
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WitnessNodeIndirect {
+  pub sloc_data: SourceLocation,
+  pub seal: ExprPtr,
+  pub items: EntangledPtr,
 }

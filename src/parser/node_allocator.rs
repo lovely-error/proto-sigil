@@ -15,10 +15,10 @@ pub struct EntangledPtr(pub i32);
 impl EntangledPtr {
   pub fn from_ptr_pair(
     origin: *mut (),
-    target: *mut ()
+    referent: *mut ()
   ) -> Option<Self> { unsafe {
     let diff =
-      target.cast::<u8>()
+      referent.cast::<u8>()
             .offset_from(origin.cast());
     if diff.abs() > (u32::MAX >> 1) as isize {
       return None;

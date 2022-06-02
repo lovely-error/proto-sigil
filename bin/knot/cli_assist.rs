@@ -230,7 +230,7 @@ impl KnotState {
   fn process_files(&mut self, files: Vec<PathBuf>) {
     let mut decls = Vec::new();
     let mut chars = String::new();
-    for file_path in files {
+    for file_path in files.iter() {
       let mut data = File::open(file_path).unwrap();
       let _ = data.read_to_string(&mut chars);
       let mut parser = ParsingState::init(
@@ -247,8 +247,8 @@ impl KnotState {
           let _ = self.out.write(msg.as_bytes());
         }
       }
-      let msg = format!("{:#?}", decls);
-      let _ = self.out.write(msg.as_bytes());
     }
+    let msg = format!("{:#?}", decls);
+    let _ = self.out.write(msg.as_bytes());
   }
 }

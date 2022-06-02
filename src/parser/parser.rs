@@ -1,14 +1,19 @@
 
-use std::mem::{MaybeUninit, size_of};
-use crate::{ throw, guard};
+use std::mem::{size_of};
+use std::ptr::{null_mut};
+use crate::parser::parser::symbol::{Symbol, Repr};
+use crate::{ throw, guard };
 use crate::preliminaries::monad::{
   fail_with_aux_gen_ctx_intro};
 use crate::parser::node_allocator::NodeSlabSizeInBytes;
 
-
+#[derive(Clone, Copy, Debug)]
 pub struct SourceLocation {
-  primary_offset: u32,
-  secondary_offset: u32
+  pub primary_offset: u32,
+  pub secondary_offset: u32
+}
+pub struct TempSlocInfo {
+  pub primary_offset: u32
 }
 
 pub struct ParsingState<'chars> {
@@ -18,6 +23,7 @@ pub struct ParsingState<'chars> {
     // Todo: figure out how to expose fields to testing code
   line_number: u32,
   node_allocator: Option<SlabAllocator<NodeSlabSizeInBytes>>,
+  slab_alloc_32: Option<SlabAllocator<32>>,
   total_char_count: u32,
 }
 
@@ -80,6 +86,7 @@ impl<'v> ParsingState<'v> {
       current_char: unsafe { *char_ptr.get_unchecked(0) as u32 },
       line_number: 1,
       node_allocator: None,
+      slab_alloc_32: None,
       total_char_count: 0
     }
   }
@@ -199,7 +206,15 @@ impl ParsingState<'_> {
     return char == ':' || char == ')' ||
            char == '|' || char == ',' ||
            char == ']' || char == '}' ||
-           char == EOT || char == '=' ;
+           char == EOT || char == '=' ||
+           char == ';' ;
+  }
+  pub fn begin_sloc(&self) -> TempSlocInfo {
+    TempSlocInfo { primary_offset: self.byte_index as u32 }
+  }
+  pub fn end_sloc(&self, initial_loc: &TempSlocInfo) -> SourceLocation {
+    SourceLocation { primary_offset: initial_loc.primary_offset,
+                     secondary_offset: self.byte_index as u32 }
   }
 }
 
@@ -207,7 +222,6 @@ impl ParsingState<'_> {
 /// Symbol parsing
 impl ParsingState<'_> {
   pub fn parse_symbol(&mut self) -> Maybe<symbol::Symbol> {
-    use self::symbol::{Symbol, Repr};
     let symbol_start = self.byte_index;
     self.skip_while(|self_|{
       let char = self_.current_char;
@@ -246,7 +260,7 @@ use crate::trees::raw_syntax_nodes::{
   ExprPtr, PatternExprPtr,
   CompoundPatternNode_ArgsInline, RefPatternNode,
   CompoundPatternNode_ArgsIndiSlab, RewriteRule, Definition, DeclPtr, Mapping,
-  LiftNodeItem, LiftNode};
+  LiftNodeItem, LiftNode, RawCtxPtr, WitnessNodeIndirect};
 use crate::preliminaries::mini_vector::InlineVector;
 use super::node_allocator::{SlabAllocator, EntangledPtr};
 
@@ -257,14 +271,29 @@ impl ParsingState<'_> {
     &mut self,
     root_indentation_depth: u32
   ) -> Maybe<ExprPtr> { unsafe {
+    if self.prefix_match("*", true) {
+      let star = ExprPtr::init(RawKind::Star, null_mut());
+      return Ok(star)
+    }
+    if self.prefix_match("[|", false) {
+      let wit = self.parse_witness()?;
+      return Ok(wit);
+    }
     if self.prefix_match("\\{", false) {
       let lambda = self.parse_lambda()?;
       return Ok(lambda);
     }
+    let imp_ctx: RawCtxPtr =
+    if self.prefix_match("{", false) {
+      let ctx = self.parse_implicit_context()?;
+      self.skip_trivia();
+      ctx
+    } else { RawCtxPtr::init_null() };
     if self.prefix_match("(", false) {
-      let lift = self.parse_lift_node()?;
+      let lift = self.parse_lift_node(imp_ctx)?;
       return Ok(lift);
     }
+    let loc = self.begin_sloc();
     let root = self.parse_symbol()?;
     let mut subexprs =
       InlineVector::<4, ExprPtr>::init();
@@ -289,33 +318,30 @@ impl ParsingState<'_> {
       }
       let terminal_subexpr = self.parse_symbol()?;
       let mem_ptr = self.get_slab();
-          let subexpr = RefNode {
-            name: terminal_subexpr,
-            //sloc_data:
-          };
-          mem_ptr.cast::<RefNode>().write(subexpr);
-          let expr_ptr = ExprPtr::init(RawKind::Ref, mem_ptr);
-          subexprs.append(expr_ptr);
+      let data = &mut *mem_ptr.cast::<RefNode>();
+      data.name = terminal_subexpr;
+      data.ctx_ptr = RawCtxPtr::init_null();
+      let expr_ptr = ExprPtr::init(RawKind::Ref, mem_ptr);
+      subexprs.append(expr_ptr);
     };
+    let loc = self.end_sloc(&loc);
     let this_node_ptr =
       self.get_slab();
     if subexprs.is_empty() {
-      let subexpr = RefNode {
-        name: root,
-        //sloc_data:
-      };
-      this_node_ptr.cast::<RefNode>().write(subexpr);
+      let node_ptr = &mut *this_node_ptr.cast::<RefNode>();
+      node_ptr.name = root;
+      node_ptr.ctx_ptr = imp_ctx;
       let expr_ptr = ExprPtr::init(RawKind::Ref, this_node_ptr);
       return Ok(expr_ptr);
     };
     let count = subexprs.count_items();
-    if count <= 4 {
+    if count <= 2 {
       let mut data =
-        MaybeUninit::<AppNodeArgsInline>::uninit();
-      let ptr = data.assume_init_mut();
-      ptr.name = root;
-      subexprs.move_content_into(ptr.args.as_mut_ptr());
-      this_node_ptr.cast::<AppNodeArgsInline>().write(data.assume_init());
+        &mut *this_node_ptr.cast::<AppNodeArgsInline>();
+      data.name = root;
+      data.sloc_data = loc;
+      data.ctx_ptr = imp_ctx;
+      subexprs.move_content_into(data.args.as_mut_ptr());
       let expr_ptr = ExprPtr::init_counted_node(
         RawKind::App_ArgsInline, this_node_ptr, count as usize);
       return Ok(expr_ptr);
@@ -330,6 +356,8 @@ impl ParsingState<'_> {
         &mut *this_node_ptr.cast::<AppNodeIndirectSmall>();
       node.name = root;
       node.args = ptr_to_arg_ptrs;
+      node.sloc_data = loc;
+      node.ctx_ptr = imp_ctx;
       let expr_ptr = ExprPtr::init_counted_node(
         RawKind::App_ArgsInSlab, this_node_ptr, count as usize);
       return Ok(expr_ptr);
@@ -337,11 +365,96 @@ impl ParsingState<'_> {
 
     todo!("too many args :)");
   } }
+  pub fn parse_implicit_context(&mut self) -> Maybe<RawCtxPtr> {
+    guard! {
+      self.prefix_match("{", true)
+      => self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    };
+    let mut items =
+      InlineVector::<4, (Symbol, ExprPtr)>::init();
+    loop {
+      self.skip_trivia();
+      let sym = self.parse_symbol()?;
+      self.skip_trivia();
+      if self.prefix_match(":", true) {
+        let indent = self.probe_depth();
+        let expr = self.parse_expr(indent)?;
+        items.append((sym, expr));
+        self.skip_trivia();
+      } else {
+        items.append((sym, ExprPtr::init_null()));
+      }
+      match () {
+        _ if self.prefix_match(",", true) => continue,
+        _ if self.prefix_match("}", true) => break,
+        _ => {
+          throw! { self.fail_with(ParseErrorKind::UnexpectedCharacter) }
+        }
+      }
+    }
+    let count = items.count_items();
+    if count as usize
+      <= NodeSlabSizeInBytes / size_of::<(Symbol, ExprPtr)>() {
+        let slab = self.get_slab();
+        items.move_content_into(slab.cast());
+        let ptr = RawCtxPtr::init(
+          count as u8, slab);
+        return Ok(ptr)
+    }
+    todo!()
+  }
+  pub fn parse_witness(&mut self) -> Maybe<ExprPtr> {
+    let loc = self.begin_sloc();
+    guard! {
+      self.prefix_match("[|", true) =>
+      self.fail_with(ParseErrorKind::UnexpectedCharacter) };
+    let mut items =
+      InlineVector::<4, ExprPtr>::init();
+    loop {
+      let depth = self.probe_depth();
+      let expr = self.parse_expr(depth)?;
+      items.append(expr);
+      self.skip_trivia();
+      match () {
+        _ if self.prefix_match(",", true) => continue,
+        _ if self.prefix_match(";", true) => break,
+        _ => throw! { self.fail_with(ParseErrorKind::UnexpectedCharacter) }
+      };
+    };
+    let depth = self.probe_depth();
+    let focus = self.parse_expr(depth)?;
+    self.skip_trivia();
+    guard! {
+      self.prefix_match("|]", true) =>
+      self.fail_with(ParseErrorKind::UnexpectedCharacter) };
+    let loc = self.end_sloc(&loc);
+    let this_node = self.get_slab();
+    let count = items.count_items();
+    if count as usize <= NodeSlabSizeInBytes / size_of::<ExprPtr>() {
+      let item_storage = self.get_slab();
+      items.move_content_into(item_storage.cast());
+      let ptr =
+        EntangledPtr::from_ptr_pair(
+          this_node.cast(), item_storage.cast())
+          .unwrap();
+      let mut data = unsafe {
+        &mut *this_node.cast::<WitnessNodeIndirect>() };
+      data.seal = focus;
+      data.sloc_data = loc;
+      data.items = ptr;
+      let expr_ptr =
+        ExprPtr::init_counted_node(
+          RawKind::Wit, this_node, count as usize);
+      return Ok(expr_ptr)
+    }
+
+    todo!()
+  }
 }
 
 
 impl ParsingState<'_> {
-  pub fn parse_lift_node(&mut self) -> Maybe<ExprPtr> {
+  pub fn parse_lift_node(&mut self, imp_ctx: RawCtxPtr) -> Maybe<ExprPtr> {
     guard! {
       self.prefix_match("(", true) =>
       self.fail_with(ParseErrorKind::UnexpectedCharacter)
@@ -397,6 +510,7 @@ impl ParsingState<'_> {
       data.head = EntangledPtr::from_ptr_pair(
         node_ptr, slab).unwrap();
       data.spine_expr = spine;
+      data.ctx_ptr = imp_ctx;
       let node : ExprPtr = match node_kind {
         RawKind::Fun => ExprPtr::init_counted_node(
           RawKind::Fun, node_ptr, count as _),
@@ -495,6 +609,7 @@ impl ParsingState<'_> {
       self.skip_trivia();
       if self.at_terminator() { break; }
       if self.prefix_match("(", true) {
+        self.skip_trivia();
         let sub_pat = self.parse_pattern()?;
         args.append(sub_pat);
         self.skip_trivia();
