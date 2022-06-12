@@ -39,7 +39,7 @@ fn size_test () {
 #[test]
 fn must_work () {
 
-  const Limit : u64 = 64;
+  const Limit : u64 = 1024;
   struct Ctx { pub counter: AtomicU64 }
   fn bump(mut tf : TaskFrameHandle) -> ActionPtr {
     let ctx = tf.interpret_frame::<Ctx>();
@@ -55,6 +55,7 @@ fn must_work () {
       handle.assign_work(work_item);
     };
     fn checker(mut tf : TaskFrameHandle) -> Option<ActionPtr> {
+      println!("Condition checker pocked!");
       let ctx = tf.interpret_frame::<Ctx>();
       let count = ctx.counter.load(Ordering::Relaxed);
       if count == Limit {
@@ -73,7 +74,7 @@ fn must_work () {
   fn begin(mut tf : TaskFrameHandle) -> ActionPtr {
     let ctx = tf.interpret_frame::<Ctx>();
     ctx.counter = AtomicU64::new(0);
-    println!("greetings!\nWitness the swarm!");
+    println!("Greetings!\nWitness the swarm!");
     return ActionPtr::make_fanout(swarm_setup_shim);
   }
 
@@ -89,7 +90,7 @@ fn must_work () {
   let finish = SystemTime::now();
   let diff =
     finish.duration_since(start).unwrap();
-  println!("{}", diff.as_micros());
+  println!("Micros : {}", diff.as_micros());
 
 }
 
@@ -102,4 +103,13 @@ fn byte_order () {
   println!("{:#066b}" , unsafe { transmute::<_, u64>(i) });
   println!("{:#010b}", 0u8 ^ 1 << 2);
   println!( "{}", (!(1u8 << 2)) .trailing_ones() )
+}
+
+fn scope () {
+  {
+    fn func1() {}
+  };
+  {
+    fn func1() {}
+  };
 }

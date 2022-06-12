@@ -3,7 +3,7 @@ use std::{
   intrinsics::transmute,
   sync::atomic::{AtomicU64, Ordering, fence},
   ptr::null_mut,
-  alloc::{Layout, alloc}};
+  alloc::{Layout, alloc, dealloc}};
 
 
 #[repr(align(8))]
@@ -130,6 +130,36 @@ impl GranularSlabAllocator {
   } }
 }
 
+impl Drop for GranularSlabAllocator {
+  fn drop(&mut self) { unsafe {
+    //let mut total_of_released_pages = 0u64;
+    let page_layout =
+      Layout::from_size_align_unchecked(4096, 1);
+    let mut page_ptr = self.free_page_list;
+    let null_mut = null_mut();
+    loop {
+      if page_ptr == null_mut { break; }
+      let next = *page_ptr.cast::<*mut ()>();
+      dealloc(page_ptr.cast(), page_layout);
+      page_ptr = next;
+      //total_of_released_pages += 1;
+    }
+    if self.b128_page_ptr != null_mut {
+      dealloc(self.b128_page_ptr.cast(), page_layout);
+      //total_of_released_pages += 1;
+    }
+    if self.b256_page_prt != null_mut {
+      dealloc(self.b256_page_prt.cast(), page_layout);
+      //total_of_released_pages += 1;
+    }
+    if self.b512_page_ptr != null_mut {
+      dealloc(self.b512_page_ptr.cast(), page_layout);
+      //total_of_released_pages += 1;
+    }
+    //println!("Deallocated {} pages", total_of_released_pages);
+  } }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MemorySlabControlItem(u64);
 impl MemorySlabControlItem {
@@ -140,7 +170,7 @@ impl MemorySlabControlItem {
     Self(a)
   }
   pub fn project_index(&self) -> u8 {
-    unsafe { transmute(self.0 as u8) }
+    self.0 as u8
   }
   pub fn project_ptr(&self) -> *mut () {
     (self.0 >> 8) as *mut _
