@@ -7,4 +7,5 @@ edition = "2021"
 
 [[bin]]
 name = "knot"
-path = "bin/knot/main.rs"
+path = "bin/cli/main.rs"
+

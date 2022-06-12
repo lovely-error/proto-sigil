@@ -19,7 +19,7 @@ impl EntangledPtr {
   ) -> Option<Self> { unsafe {
     let diff =
       referent.cast::<u8>()
-            .offset_from(origin.cast());
+              .offset_from(origin.cast());
     if diff.abs() > (u32::MAX >> 1) as isize {
       return None;
     };
@@ -39,7 +39,7 @@ pub struct SlabAllocator<const item_size : usize> {
   pub capacity: u32
 }
 
-impl<const s : usize> SlabAllocator<s> {
+impl <const s : usize> SlabAllocator<s> {
   pub fn init() -> Self { unsafe {
     let page = alloc(Page4K).cast::<()>();
     *page.cast::<usize>() = usize::MAX;
@@ -51,23 +51,26 @@ impl<const s : usize> SlabAllocator<s> {
   } }
 }
 
-impl<const s : usize> SlabAllocator<s> {
+impl <const s : usize> SlabAllocator<s> {
   pub fn get_slot(&mut self) -> *mut () { unsafe {
     let product =
-      self.current_page.cast::<[u8;s]>().add(self.ptr as usize).cast();
+      self.current_page
+      .cast::<[u8;s]>()
+      .add(self.ptr as usize)
+      .cast::<()>();
     self.ptr += 1;
     if self.ptr == 4096 / s as u16 {
       let fresh_page = alloc(Page4K);
       *fresh_page.cast::<*mut ()>() = self.last_page;
       self.last_page = self.current_page;
-      self.current_page = fresh_page.cast();
+      self.current_page = fresh_page.cast::<()>();
       self.capacity += 4096;
     }
     return product;
   } }
 }
 
-impl<const s : usize> Drop for SlabAllocator<s> {
+impl <const s : usize> Drop for SlabAllocator<s> {
   fn drop(&mut self) { unsafe {
     dealloc(self.current_page.cast(), Page4K);
     if self.current_page == self.last_page { return (); }

@@ -1,8 +1,9 @@
 
 use std::intrinsics::copy_nonoverlapping;
 use std::marker::PhantomData;
-use std::mem::{MaybeUninit, size_of, align_of, forget};
+use std::mem::{MaybeUninit, size_of, align_of, forget, needs_drop};
 use std::alloc::{alloc, Layout, dealloc};
+use std::ptr::drop_in_place;
 
 
 #[derive(Debug)]
@@ -14,7 +15,7 @@ pub struct InlineVector<const stack_size : usize, Item> {
   _own_mark: PhantomData<Item>,
 }
 
-impl<const n : usize, T> InlineVector<n, T> {
+impl <const n : usize, T> InlineVector<n, T> {
   pub fn init() -> Self {
     Self {
       heap: usize::MAX as *mut T,
@@ -26,7 +27,7 @@ impl<const n : usize, T> InlineVector<n, T> {
   }
 }
 
-impl<const n : usize, T> InlineVector<n, T> {
+impl <const n : usize, T> InlineVector<n, T> {
   fn alloc_heap_storage(&mut self) {
     unsafe {
       let layout =
@@ -60,10 +61,11 @@ impl<const n : usize, T> InlineVector<n, T> {
   pub fn append(&mut self, new_item: T) {
     if (self.ptr as usize) < n {
       unsafe {
-        *((self.stack
-          .as_ptr()
-          .add(self.ptr as usize)) as *mut T)
-          = new_item;
+        self.stack
+          .as_mut_ptr()
+          .add(self.ptr as usize)
+          .cast::<T>()
+          .write(new_item);
       }
       self.ptr += 1;
       return ();
@@ -96,24 +98,41 @@ impl<const n : usize, T> InlineVector<n, T> {
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;
   }
-  pub fn move_content_into(self, target: *mut T) { unsafe {
+  pub fn move_content_into(self, recepient: *mut T) { unsafe {
     copy_nonoverlapping(
-      self.stack.as_ptr(), target.cast(), n);
+      self.stack.as_ptr(), recepient.cast(),
+      if self.ptr as usize <= n { self.ptr as usize } else { n });
     if self.did_allocate_on_heap() {
       copy_nonoverlapping(
         self.heap,
-        target.add(n),
+        recepient.add(n),
         self.ptr as usize - n);
     }
     forget(self);
   } }
 }
 
-//impl<const n : usize, T> Copy for InlineVector<n, T> where T:Copy {}
-
-impl<const n : usize, T> Drop for InlineVector<n, T> {
+impl <const n : usize, T> Drop for InlineVector<n, T> {
   fn drop(&mut self) { unsafe {
+    let should_run_destructor = needs_drop::<T>();
+    if should_run_destructor {
+      for i
+      in 0 .. if self.ptr as usize <= n { self.ptr as usize } else { n } {
+        let ptr =
+          self.stack
+          .as_mut_ptr()
+          .add(i)
+          .cast::<T>();
+        drop_in_place(ptr);
+      }
+    }
     if self.did_allocate_on_heap() {
+      if should_run_destructor {
+        for i in 0 .. self.ptr as usize - n {
+          let ptr = self.heap.add(i).cast::<T>();
+          drop_in_place(ptr);
+        }
+      }
       let layout =
         Layout::from_size_align_unchecked(
           size_of::<T>() * self.heap_capacity as usize,
@@ -121,4 +140,35 @@ impl<const n : usize, T> Drop for InlineVector<n, T> {
       dealloc(self.heap.cast(), layout);
     }
   } }
+}
+
+impl <const n : usize, T> InlineVector<n, T> where T: Copy {
+  fn copy_content_into(&self, recepient: *mut T) { unsafe {
+    copy_nonoverlapping(
+      self.stack.as_ptr(), recepient.cast(),
+      if self.ptr as usize <= n { self.ptr as usize } else { n });
+    if self.did_allocate_on_heap() {
+      copy_nonoverlapping(
+        self.heap,
+        recepient.add(n),
+        self.ptr as usize - n);
+    }
+  } }
+}
+
+impl <const n : usize, T> InlineVector<n, T> where T: Clone {
+  fn clone_content_into(&self, recepient: *mut T) {
+    for i
+    in 0 .. if  self.ptr as usize <= n { self.ptr } else { n as u32 } {
+      let cloned_item = self.get_ref(i).clone();
+      unsafe { recepient.add(i as usize).write(cloned_item) };
+    }
+    if self.did_allocate_on_heap() {
+      for i in 0 .. (self.ptr as usize - n) { unsafe {
+        let cloned_item =
+          self.heap.add(i).as_ref().unwrap().clone();
+        recepient.add(i + n).write(cloned_item);
+      } }
+    }
+  }
 }
