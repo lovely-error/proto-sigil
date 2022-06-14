@@ -246,8 +246,6 @@ fn elab_worker_task_loop
             let link = action.project_link();
             task.inject_action_chain(link);
             // allocate task frame and set it for current task.
-            // each task posesses a data frame that is shared with its subtasks.
-            // todo: allow subtasks to request their own data frames
             let frame_request = action.project_frame_size();
             let mem = match frame_request {
               DataFrameSize::Absent => {
@@ -263,6 +261,11 @@ fn elab_worker_task_loop
                 task_frame_allocator.acquire_memory(SlabSize::Bytes512)
               },
             };
+            // put a ptr to a parrent frame into any child that
+            // wants its own memory.
+            // root of the task tree point to null
+            mem.inject_parent_frame_ptr(
+              task.project_data_frame_ptr().project_ptr());
             task.inject_data_frame_ptr(mem);
             continue 'immidiate;
           },

@@ -187,6 +187,19 @@ impl MemorySlabControlItem {
       (sized << 6) + (index & ((1 << 6) - 1)) as u64;
     return Self(indexed)
   } }
+  pub fn inject_parent_frame_ptr(&self, parent_ptr: *mut ()) {
+    let size = self.project_size();
+    let offset = match size {
+      SlabSize::Bytes128 => 120usize,
+      SlabSize::Bytes256 => 248,
+      SlabSize::Bytes512 => 504,
+    };
+    unsafe {
+      let ptr =
+        self.project_ptr().cast::<u8>().add(offset);
+      *ptr.cast::<*mut ()>() = parent_ptr;
+    }
+  }
   pub fn project_size(&self) -> SlabSize {
     unsafe { transmute(((self.0 >> 6) as u8) & ((1 << 2) - 1)) }
   }

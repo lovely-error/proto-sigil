@@ -2,7 +2,7 @@
 
 use std::{
   alloc::dealloc, mem::{size_of, align_of}, time::{SystemTime},
-  intrinsics::{transmute}, ops::Shl, sync::{atomic::{AtomicU64, Ordering}, Mutex}};
+  intrinsics::{transmute}, ops::Shl, sync::{atomic::{AtomicU64, Ordering, AtomicBool}, Mutex}, ptr::addr_of_mut};
 
 use proto_sigil::elaborator::{
   action_chain::{
@@ -118,3 +118,55 @@ fn scope () {
 // fn hhh () {
 //   println!("{}", align_of::<[u8;3]>())
 // }
+
+#[test]
+fn children_see_parrents() {
+  struct Ctx { str: String, done: AtomicBool }
+  fn step2(tf : TaskFrameHandle) -> ActionPtr { unsafe {
+    let pf = tf.get_parrent_frame();
+    let parent_frame = &mut *pf.cast::<Ctx>();
+    println!("{}", parent_frame.str);
+    parent_frame.done.store(true, Ordering::Relaxed);
+    return ActionPtr::make_completion(true);
+  } }
+  fn deleter(_ : TaskFrameHandle) -> ActionPtr {
+    return ActionPtr::make_completion(true);
+  }
+  fn checker(tf : TaskFrameHandle) -> Option<ActionPtr> {
+    let frame = tf.interpret_frame::<Ctx>();
+    let done = frame.done.load(Ordering::Relaxed);
+    if done {
+      return Some(
+        ActionPtr::make_link(LinkKind::Step, deleter)); }
+    return None;
+  }
+  fn spawn(_ : TaskFrameHandle, mut tg : TaskGroupHandle) -> ActionPtr {
+    let p = ActionPtr::make_link(
+      LinkKind::Step, step2);
+    let p = ActionPtr::init(
+        DataFrameSize::Bytes128, p);
+    tg.assign_work(p);
+    return ActionPtr::make_progress_checker(checker);
+  }
+  fn step1(tf : TaskFrameHandle) -> ActionPtr { unsafe {
+    let frame = tf.interpret_frame::<Ctx>();
+    addr_of_mut!(frame.str).write(String::new());
+    frame.str.push_str("I do exist!");
+    frame.done = AtomicBool::new(false);
+    return ActionPtr::make_fanout(spawn);
+  } }
+
+  let ptr =
+    ActionPtr::make_link(LinkKind::Step, step1);
+  let ptr = ActionPtr::init(
+    DataFrameSize::Bytes128, ptr);
+
+  let start = SystemTime::now();
+  let w = WorkGroupRef::init(1, ptr);
+  w.await_completion();
+  let finish = SystemTime::now();
+  let diff =
+    finish.duration_since(start).unwrap();
+  println!("Micros : {}", diff.as_micros());
+
+}

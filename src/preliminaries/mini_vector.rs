@@ -95,7 +95,8 @@ impl <const n : usize, T> InlineVector<n, T> {
     return self.ptr == 0;
   }
   pub fn count_items(&self) -> u32 {
-    return self.ptr;
+    if self.ptr == 0 { return 0 }
+    return (self.ptr - 1).max(1);
   }
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;
@@ -117,16 +118,15 @@ impl <const n : usize, T> InlineVector<n, T> {
     self.ptr = 0;
   }
   pub fn pop(&mut self) -> Option<T> { unsafe {
+    if self.ptr == 0 { return None };
+    self.ptr -= 1;
     let ptr = self.ptr as usize;
-    if ptr == 0 { return None };
     if ptr >= n {
       let item = self.heap.add(ptr - n).read();
-      self.ptr -= 1;
       return Some(item);
     };
     let item =
       self.stack.as_mut_ptr().add(ptr).cast::<T>().read();
-    self.ptr -= 1;
     return Some(item)
   } }
 }
