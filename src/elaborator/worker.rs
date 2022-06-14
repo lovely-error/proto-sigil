@@ -4,19 +4,23 @@ use std::{
   sync::{
     Mutex, atomic::{AtomicBool, Ordering, AtomicU16}},
     mem::{MaybeUninit, size_of},
-    ptr::addr_of_mut, intrinsics::transmute,
+    ptr::addr_of_mut, intrinsics::{transmute},
     alloc::{Layout, alloc}};
-use crate::elaborator::{
-  frame_allocator::{GranularSlabAllocator, SlabSize}, action_chain::{DataFrameSize, TaskFrameHandle}};
+use crate::{elaborator::{
+  frame_allocator::{GranularSlabAllocator, SlabSize},
+  action_chain::{DataFrameSize, TaskFrameHandle}},
+  preliminaries::mini_vector::InlineVector};
 
-use super::{action_chain::{Task, LinkKind, ActionPtr, TaskGroupHandle}, frame_allocator::MemorySlabControlItem};
+use super::{
+  action_chain::{Task, LinkKind, ActionPtr, TaskGroupHandle},
+  frame_allocator::MemorySlabControlItem};
 
 #[derive(Debug)]
 pub struct LoopData<T> {
   pub read_page: *mut T,
   pub write_page: *mut T,
-  newest_page: *mut T,
-  write_ptr: u16,
+  pub newest_page: *mut T,
+  pub write_ptr: u16,
   read_ptr: u16,
   //#[cfg(test)]
   //pub number_of_allocated_pages: usize,
@@ -112,17 +116,12 @@ pub struct WorkGroup {
   liveness_count: AtomicU16,
 }
 
+
+
+
 enum RetirementChoise { Suspend, Terminate, Continue }
 
-
-// tbd:
-// • Should the impl utilise the defference
-//   between `spawned subtasks` and `blocked tasks` ?
-//   This can make loop more efficient but it has to be
-//   decided on what amount of generated subtasks is too big to have
-//   for oneself for too long.
-//   Maybe, task cache size is enough to warrant a descision ?
-
+// todo: make copying in batches. dont use drain
 fn elab_worker_task_loop
   <const TASK_CACHE_SIZE : usize>(
   stop_flag_ref: &AtomicBool,
@@ -131,38 +130,37 @@ fn elab_worker_task_loop
   liveness_count: &AtomicU16,
 ) {
   assert!(
-    TASK_CACHE_SIZE <= u8::MAX as usize, "Too much of cache is bad for anyone!");
+    TASK_CACHE_SIZE <= u8::MAX as usize,
+    "Too much of cache is bad for anyone!");
   let mut task_frame_allocator =
     GranularSlabAllocator::init_new();
   let mut task_cache: [MaybeUninit<Task> ; TASK_CACHE_SIZE] =
     unsafe { MaybeUninit::uninit().assume_init() };
   let mut limit: u16 = 0;
-  let mut defered_tasks = Vec::<Task>::new();
-  defered_tasks.reserve(32);
+  let mut spawned_subtasks =
+    InlineVector::<32, Task>::init();
+  let mut pending_tasks =
+    InlineVector::<8, Task>::init();
   'main : loop {
     if stop_flag_ref.load(Ordering::Relaxed) { break 'main; };
     // take a couple of tasks to this thread's storage
     // to not put much pressure on mutex by frequent retriewing
     // of items from work queue. It might appear
     // because majority of tasks are expected to be quiete cheap to execute
+    let mut should_ping_threads : bool = false;
     let retire_strategy: RetirementChoise =
     queue_ref.with_acquired_queue(|queue| { unsafe {
 
+      let did_produce_work =
+          !spawned_subtasks.is_empty() || !pending_tasks.is_empty();
       if queue.is_empty() {
-        if !defered_tasks.is_empty() {
-          // nothing on queue but something here; commit work, then reload.
-          // this is unlikely scenario.
-          // tbd: should pull in items before awaking?
-          //  this may lower contention (?)
-          for task in defered_tasks.drain(0 ..) {
-            queue.enqueue_item(task);
-          }
-          // since there was nothing on queue, other threads might have chosen
-          // to be suspended. unhibernate em now!
-          for thread_handle in (&*threads).iter() {
-            thread_handle.thread().unpark()
-          }
-        } else {
+        if did_produce_work { should_ping_threads = true; }
+
+        pending_tasks.copy_quickly_into(queue);
+        pending_tasks.reset();
+        spawned_subtasks.copy_quickly_into(queue);
+        spawned_subtasks.reset();
+        if !did_produce_work {
           // nothing was on queue and no pending tasks
           // were generated locally in previous quantum.
           // other threads migh still generate work.
@@ -173,6 +171,9 @@ fn elab_worker_task_loop
           return RetirementChoise::Suspend;
         }
       }
+      let some_threads_are_dormant =
+        liveness_count.load(Ordering::Relaxed) as usize
+        != (&*threads).len();
       // pull in some fresh items
       for i in 0 .. TASK_CACHE_SIZE as u16 {
         let item = queue.dequeue_item();
@@ -183,25 +184,32 @@ fn elab_worker_task_loop
           },
           None => {
             limit = i;
-            if !defered_tasks.is_empty() {
-              // some work is there to commit from previous quantum
-              for task in defered_tasks.drain(0 ..) {
-                queue.enqueue_item(task);
-              }
+            if did_produce_work && some_threads_are_dormant {
+              should_ping_threads = true
             }
+            spawned_subtasks.copy_quickly_into(queue);
+            spawned_subtasks.reset();
+            pending_tasks.copy_quickly_into(queue);
+            pending_tasks.reset();
             return RetirementChoise::Continue;
           },
         };
       }
       limit = TASK_CACHE_SIZE as u16;
-      if !defered_tasks.is_empty() {
-        // some work is there to commit from previous quantum
-        for task in defered_tasks.drain(0 ..) {
-          queue.enqueue_item(task);
-        }
+      if did_produce_work && some_threads_are_dormant {
+        should_ping_threads = true
       }
+      spawned_subtasks.copy_quickly_into(queue);
+      spawned_subtasks.reset();
+      pending_tasks.copy_quickly_into(queue);
+      pending_tasks.reset();
       return RetirementChoise::Continue;
     } });
+    if should_ping_threads {
+      for thread_handle in unsafe { (&*threads).iter() } {
+        thread_handle.thread().unpark()
+      }
+    }
     match retire_strategy {
       RetirementChoise::Suspend => {
         // queue appear to be empty.
@@ -224,7 +232,7 @@ fn elab_worker_task_loop
 
     // work on a couple of local tasks
     let mut index = 0u16;
-    loop {
+    'that : loop {
       let task = unsafe {
         (*task_cache.as_mut_ptr()
         .add(index as usize))
@@ -274,15 +282,28 @@ fn elab_worker_task_loop
             let tf_handle = TaskFrameHandle(df_ptr);
             let tg_handle =
               TaskGroupHandle(
-                &mut defered_tasks, df_ptr);
+                &mut spawned_subtasks, df_ptr);
             let setuper =
               action.project_setup_shim_ptr();
             let continuation = setuper(tf_handle, tg_handle);
             let mut dependent_task = *task;
             dependent_task.inject_action_chain(continuation);
-            defered_tasks.push(dependent_task);
+            spawned_subtasks.append(dependent_task);
             // patch the hole !
             if limit == 1 {
+              let len = spawned_subtasks.count_items() as usize;
+              if len > 0 && len <= TASK_CACHE_SIZE {
+                // can reload cache without going through queue
+                limit = len as u16; index = 0;
+                for i in 0 .. len {
+                  let item = spawned_subtasks.pop().unwrap();
+                  unsafe {
+                    task_cache.as_mut_ptr().add(i)
+                    .cast::<Task>().write(item);
+                  }
+                }
+                continue 'that;
+              }
               // nothing to patch. this quantum has complete.
               // sched subtasks & get new batch
               continue 'main;
@@ -312,6 +333,19 @@ fn elab_worker_task_loop
             }
 
             if limit == 1 { // nothing to patch. sched subtasks & get new batch
+              let len = spawned_subtasks.count_items() as usize;
+              if len > 0 && len <= TASK_CACHE_SIZE {
+                // can reload cache without going through queue
+                limit = len as u16; index = 0;
+                for i in 0 .. len {
+                  let item = spawned_subtasks.pop().unwrap();
+                  unsafe {
+                    task_cache.as_mut_ptr().add(i)
+                    .cast::<Task>().write(item);
+                  }
+                }
+                continue 'that;
+              }
               continue 'main;
             }
             if index == limit { // already at the end. just decrement end index
@@ -343,8 +377,23 @@ fn elab_worker_task_loop
               task.inject_action_chain(patch);
               continue 'immidiate;
             } else {
-              defered_tasks.push(*task);
+              // put it in the wait corner
+              pending_tasks.append(*task);
+
               if limit == 1 { // nothing to patch. sched subtasks & get new batch
+                let len = spawned_subtasks.count_items() as usize;
+                if len > 0 && len <= TASK_CACHE_SIZE {
+                  // can reload cache without going through queue
+                  limit = len as u16; index = 0;
+                  for i in 0 .. len {
+                    let item = spawned_subtasks.pop().unwrap();
+                    unsafe {
+                      task_cache.as_mut_ptr().add(i)
+                      .cast::<Task>().write(item);
+                    }
+                  }
+                  continue 'that;
+                }
                 continue 'main;
               }
               if index == limit { // already at the end. just decrement end index
@@ -421,3 +470,4 @@ impl WorkGroupRef {
     self.0.was_signaled_to_stop.fetch_or(true, Ordering::Relaxed);
   }
 }
+

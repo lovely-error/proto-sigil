@@ -9,3 +9,6 @@ edition = "2021"
 name = "knot"
 path = "bin/cli/main.rs"
 
+[[bin]]
+name = "for_science"
+path = "bin/fs/main.rs"

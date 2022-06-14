@@ -1,7 +1,9 @@
 
-use std::intrinsics::transmute;
+use std::{intrinsics::transmute, mem::size_of};
 
-use super::frame_allocator::MemorySlabControlItem;
+use crate::preliminaries::mini_vector::SomeInlineVector;
+
+use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 
 
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
@@ -15,7 +17,7 @@ pub enum DataFrameSize {
 }
 
 pub struct TaskGroupHandle<'i>(
-  pub(super) &'i mut Vec<Task>, pub(super) MemorySlabControlItem);
+  pub(super) &'i mut dyn SomeInlineVector<Item = Task>, pub(super) MemorySlabControlItem);
 impl TaskGroupHandle<'_> {
   pub fn assign_work(&mut self, item: ActionPtr) {
     let task =
@@ -26,10 +28,31 @@ impl TaskGroupHandle<'_> {
 
 pub struct TaskFrameHandle(pub MemorySlabControlItem);
 impl TaskFrameHandle {
-  pub fn interpret_frame<T>(&mut self) -> &mut T {
-    // todo, vend MSCI with slab size info to check
-    // size compatibility
-    unsafe { &mut *self.0.project_ptr().cast::<T>() }
+  pub fn interpret_frame<T>(&self) -> &mut T {
+    let size = self.0.project_size();
+    let size = match size {
+      SlabSize::Bytes128 => 128,
+      SlabSize::Bytes256 => 256,
+      SlabSize::Bytes512 => 512,
+    };
+    if size_of::<T>() > size {
+      panic!("Attempt to interpret task frame as object that is bigger then frame itself");
+    }
+    return unsafe { &mut *self.0.project_ptr().cast::<T>() }
+  }
+  pub fn get_parrent_frame(&self) -> *mut () {
+    let size = self.0.project_size();
+    let offset = match size {
+      SlabSize::Bytes128 => 120usize,
+      SlabSize::Bytes256 => 248,
+      SlabSize::Bytes512 => 504,
+    };
+    unsafe {
+      let ptr =
+        self.0.project_ptr().cast::<u8>().add(offset);
+      let ptr = *ptr.cast::<u64>();
+      return ptr as *mut ();
+    }
   }
 }
 

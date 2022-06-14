@@ -3,7 +3,9 @@ use std::intrinsics::copy_nonoverlapping;
 use std::marker::PhantomData;
 use std::mem::{MaybeUninit, size_of, align_of, forget, needs_drop};
 use std::alloc::{alloc, Layout, dealloc};
-use std::ptr::drop_in_place;
+use std::ptr::{drop_in_place,};
+
+use crate::elaborator::worker::LoopData;
 
 
 #[derive(Debug)]
@@ -110,6 +112,23 @@ impl <const n : usize, T> InlineVector<n, T> {
     }
     forget(self);
   } }
+  pub fn reset(&mut self) {
+    if needs_drop::<T>() { todo!() }
+    self.ptr = 0;
+  }
+  pub fn pop(&mut self) -> Option<T> { unsafe {
+    let ptr = self.ptr as usize;
+    if ptr == 0 { return None };
+    if ptr >= n {
+      let item = self.heap.add(ptr - n).read();
+      self.ptr -= 1;
+      return Some(item);
+    };
+    let item =
+      self.stack.as_mut_ptr().add(ptr).cast::<T>().read();
+    self.ptr -= 1;
+    return Some(item)
+  } }
 }
 
 impl <const n : usize, T> Drop for InlineVector<n, T> {
@@ -170,5 +189,41 @@ impl <const n : usize, T> InlineVector<n, T> where T: Clone {
         recepient.add(i + n).write(cloned_item);
       } }
     }
+  }
+}
+
+impl <const n : usize, T> InlineVector<n, T> where T:Copy {
+  // not too fancy impl, tbh.
+  // but making it perform faster is harder
+  pub fn copy_quickly_into(&self, target: &mut LoopData<T>) { unsafe {
+    if self.is_empty() { return; }
+    let end_index = self.count_items() as usize;
+    let dst_capacity =
+      (4096 / size_of::<T>()) - target.write_ptr as usize;
+    if dst_capacity > end_index {
+      // do it in one take
+      let dst =
+        target.write_page.add(target.write_ptr as usize);
+      self.copy_content_into(dst);
+      target.write_ptr += end_index as u16;
+      return;
+    }
+    // do it bit by bit
+    for i in 0 .. end_index as u32 {
+      let item = self.get_ref(i);
+      target.enqueue_item(*item);
+    }
+  } }
+}
+
+pub trait SomeInlineVector {
+  type Item;
+  fn push(&mut self, item: Self::Item);
+}
+
+impl <const n : usize, T> SomeInlineVector for InlineVector<n, T> {
+  type Item = T;
+  fn push(&mut self, item: Self::Item) {
+    self.append(item)
   }
 }

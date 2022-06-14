@@ -17,7 +17,8 @@ impl PageHeaderData {
     Self { occupation_map: 1, is_detached: false, _padding: [0;3] }
   }
 }
-const OrphanPage : PageHeaderData =
+
+const ORPHAN_PAGE : PageHeaderData =
   PageHeaderData {_padding: [0;3], is_detached: true, occupation_map: 1};
 
 
@@ -73,7 +74,7 @@ impl GranularSlabAllocator {
         _padding: [0;3], is_detached: false, occupation_map: 0b11 };
       let slab_ptr = (*page_ptr).cast::<u64>().add(2 * mult);
       control_item = MemorySlabControlItem::init(
-        slab_ptr.cast(), 1);
+        slab_ptr.cast(), 1, slab_size);
       return control_item;
     } }
     // is it possible to count trailing_ones as a single
@@ -86,7 +87,7 @@ impl GranularSlabAllocator {
     let mut offset: u32;
     let mut free_slab_index: u64;
     let mut page_header: PageHeaderData;
-    loop {
+    'spininng : loop {
       page_header = unsafe {
         transmute::<_, PageHeaderData>(page_header_) };
       offset = page_header.occupation_map.trailing_ones();
@@ -97,8 +98,18 @@ impl GranularSlabAllocator {
           page_header_, new,
           Ordering::Release, Ordering::Relaxed);
       match outcome {
-        Ok(_) => break,
-        Err(actual) => page_header_ = actual,
+        Ok(_) => break 'spininng,
+        Err(actual) => {
+          // someone updated the header
+          if free_slab_index & actual == 0 {
+            // but if it was caused by sombody releasing the memory
+            // then there is no conflict
+            let _ = page_header_ref.fetch_xor(
+              free_slab_index, Ordering::Relaxed); // Release ???
+            break 'spininng;
+          };
+          page_header_ = actual;
+        },
       }
     }
     if page_header.occupation_map == u32::MAX {
@@ -113,7 +124,7 @@ impl GranularSlabAllocator {
     };
     control_item =
       MemorySlabControlItem::init(
-        slab_ptr, free_slab_index as u8);
+        slab_ptr, free_slab_index as u8, slab_size);
     return control_item;
   }
   pub fn release_memory(
@@ -123,7 +134,7 @@ impl GranularSlabAllocator {
     let ptr = control_item.project_ptr();
     let header = &mut *ptr.cast::<AtomicU64>();
     let previous = header.fetch_xor(index, Ordering::Relaxed);
-    if previous ^ index == transmute(OrphanPage) { // hell, yeah! free page
+    if previous ^ index == transmute(ORPHAN_PAGE) { // hell, yeah! free page
       *ptr.cast::<*mut ()>() = self.free_page_list;
       self.free_page_list = ptr;
     }
@@ -165,12 +176,22 @@ pub struct MemorySlabControlItem(u64);
 impl MemorySlabControlItem {
   pub fn init_null() -> Self { Self(0) }
   pub fn is_null(&self) -> bool { self.0 == 0 }
-  pub fn init(slab_ptr: *mut (), index: u8) -> Self {
-    let a = ((slab_ptr as u64) << 8) + index as u64;
-    Self(a)
+  // maximal index is 2^6
+  // maximal slab size is 2^2
+  pub fn init(
+    slab_ptr: *mut (), index: u8, slab_size: SlabSize
+  ) -> Self { unsafe {
+    let sized = ((slab_ptr as u64) << 2) +
+      ((transmute::<_, u8>(slab_size) & ((1 << 2) - 1)) as u64 );
+    let indexed =
+      (sized << 6) + (index & ((1 << 6) - 1)) as u64;
+    return Self(indexed)
+  } }
+  pub fn project_size(&self) -> SlabSize {
+    unsafe { transmute(((self.0 >> 6) as u8) & ((1 << 2) - 1)) }
   }
   pub fn project_index(&self) -> u8 {
-    self.0 as u8
+    (self.0 as u8) & ((1 << 6) - 1)
   }
   pub fn project_ptr(&self) -> *mut () {
     (self.0 >> 8) as *mut _
