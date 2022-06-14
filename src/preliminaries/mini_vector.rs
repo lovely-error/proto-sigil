@@ -95,8 +95,7 @@ impl <const n : usize, T> InlineVector<n, T> {
     return self.ptr == 0;
   }
   pub fn count_items(&self) -> u32 {
-    if self.ptr == 0 { return 0 }
-    return (self.ptr - 1).max(1);
+    return self.ptr
   }
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;

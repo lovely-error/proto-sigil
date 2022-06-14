@@ -55,3 +55,15 @@ fn copying_works() {
   //println!("{:#?}", p);
   assert!(p == [u16::MAX ; 4]);
 }
+
+#[test]
+fn items_count () {
+  let mut iv = InlineVector::<2, u64>::init();
+  assert!(iv.count_items() == 0);
+  iv.append(0);
+  assert!(iv.count_items() == 1);
+  iv.append(0);
+  assert!(iv.count_items() == 2);
+  iv.append(0);
+  assert!(iv.count_items() == 3);
+}
