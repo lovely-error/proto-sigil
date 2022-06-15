@@ -2,12 +2,12 @@
 use std::{
   thread::{JoinHandle, spawn, park, yield_now},
   sync::{
-    Mutex, atomic::{AtomicBool, Ordering, AtomicU16}},
+    Mutex, atomic::{AtomicBool, Ordering, AtomicU16, AtomicU64}},
     mem::{MaybeUninit, size_of},
     ptr::addr_of_mut, intrinsics::{transmute},
     alloc::{Layout, alloc}};
 use crate::{elaborator::{
-  frame_allocator::{GranularSlabAllocator, SlabSize},
+  frame_allocator::{GranularSlabAllocator, SlabSize, PageHeaderData},
   action_chain::{DataFrameSize, TaskFrameHandle}},
   preliminaries::mini_vector::InlineVector};
 
@@ -251,21 +251,22 @@ fn elab_worker_task_loop
               DataFrameSize::Absent => {
                 MemorySlabControlItem::init_null()
               },
-              DataFrameSize::Bytes128 => {
+              DataFrameSize::Bytes120 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes128)
               },
-              DataFrameSize::Bytes256 => {
+              DataFrameSize::Bytes248 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes256)
               },
-              DataFrameSize::Bytes512 => {
+              DataFrameSize::Bytes504 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes512)
               },
             };
             // put a ptr to a parrent frame into any child that
             // wants its own memory.
             // root of the task tree point to null
-            mem.inject_parent_frame_ptr(
-              task.project_data_frame_ptr().project_ptr());
+            let parent_frame =
+              task.project_data_frame_ptr();
+            mem.inject_parent_frame(parent_frame);
             task.inject_data_frame_ptr(mem);
             continue 'immidiate;
           },
@@ -332,7 +333,7 @@ fn elab_worker_task_loop
             let should_release = action.project_deletion_flag();
             if should_release {
               task_frame_allocator.release_memory(
-                task.project_data_frame_ptr())
+                task.project_data_frame_ptr());
             }
 
             if limit == 1 { // nothing to patch. sched subtasks & get new batch
@@ -425,6 +426,7 @@ fn elab_worker_task_loop
       if index == limit { index = 0 }
     };
   };
+
 }
 
 pub struct WorkGroupRef(Box<WorkGroup>);

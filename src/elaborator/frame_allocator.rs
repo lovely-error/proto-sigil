@@ -6,20 +6,21 @@ use std::{
   alloc::{Layout, alloc, dealloc}};
 
 
-#[repr(align(8))]
-pub struct PageHeaderData {
-  pub occupation_map: u32,
-  pub is_detached: bool,
-  pub _padding: [u8;3]
-}
+#[repr(align(8))] #[derive(Debug, Clone, Copy)]
+pub struct PageHeaderData(u64);
 impl PageHeaderData {
   pub fn init_new() -> Self {
-    Self { occupation_map: 1, is_detached: false, _padding: [0;3] }
+    Self(0)
+  }
+  pub fn is_detached(&self) -> bool {
+    (self.0 & 1) == 1
+  }
+  pub fn get_occupation_map(&self) -> u64 {
+    self.0 | 1
   }
 }
 
-const ORPHAN_PAGE : PageHeaderData =
-  PageHeaderData {_padding: [0;3], is_detached: true, occupation_map: 1};
+const ORPHAN_PAGE : PageHeaderData = PageHeaderData(1);
 
 
 pub struct GranularSlabAllocator {
@@ -43,95 +44,94 @@ impl GranularSlabAllocator {
     slab_size: SlabSize
   ) -> MemorySlabControlItem {
     let page_ptr: &mut *mut ();
-    let mult: usize;
     let control_item: MemorySlabControlItem;
+    let full_mask: u64;
     match slab_size {
       SlabSize::Bytes128 => {
         page_ptr = &mut self.b128_page_ptr;
-        mult = 2;
+        full_mask = (1 << 32) - 1;
       },
       SlabSize::Bytes256 => {
         page_ptr = &mut self.b256_page_prt ;
-        mult = 4;
+        full_mask = (1 << 16) - 1;
       },
       SlabSize::Bytes512 => {
         page_ptr = &mut self.b512_page_ptr;
-        mult = 8;
+        full_mask = (1 << 8) - 1;
       },
     }
-    if *page_ptr == null_mut() { unsafe { // need some memory here
-      if self.free_page_list != null_mut() { // have spare mem; utilise it!
-        let page_after_this = *self.free_page_list.cast::<*mut ()>();
-        *page_ptr = self.free_page_list;
-        self.free_page_list = page_after_this;
-      } else { // no spare mem; alloc!
-        let fresh_page =
-          alloc(Layout::from_size_align_unchecked(4096, 1));
-        *page_ptr = fresh_page.cast();
-      }
-      // set up page header and serve a slice right away!
-      *(*page_ptr).cast::<PageHeaderData>() = PageHeaderData {
-        _padding: [0;3], is_detached: false, occupation_map: 0b11 };
-      let slab_ptr = (*page_ptr).cast::<u64>().add(2 * mult);
-      control_item = MemorySlabControlItem::init(
-        slab_ptr.cast(), 1, slab_size);
-      return control_item;
-    } }
-    // is it possible to count trailing_ones as a single
-    // bitwise op ?
-    fence(Ordering::AcqRel);
-    let page_header_ref = unsafe {
-      &mut *(*page_ptr).cast::<AtomicU64>() };
-    let mut page_header_ =
-      page_header_ref.load(Ordering::Acquire);
     let mut offset: u32;
-    let mut free_slab_index: u64;
-    let mut page_header: PageHeaderData;
-    'spininng : loop {
-      page_header = unsafe {
-        transmute::<_, PageHeaderData>(page_header_) };
-      offset = page_header.occupation_map.trailing_ones();
-      free_slab_index = 1 << offset;
-      let new = page_header_ | free_slab_index;
-      let outcome =
-        page_header_ref.compare_exchange_weak(
-          page_header_, new,
-          Ordering::Release, Ordering::Relaxed);
-      match outcome {
-        Ok(_) => break 'spininng,
-        Err(actual) => {
-          // someone updated the header
-          if free_slab_index & actual == 0 {
-            // but if it was caused by sombody releasing the memory
-            // then there is no conflict
-            let _ = page_header_ref.fetch_xor(
-              free_slab_index, Ordering::Relaxed); // Release ???
-            break 'spininng;
-          };
-          page_header_ = actual;
-        },
+    'paging : loop {
+      if *page_ptr == null_mut() { unsafe { // need some memory here
+        if self.free_page_list != null_mut() { // have spare mem; utilise it!
+          let page_after_this =
+            *self.free_page_list.cast::<*mut ()>();
+          *page_ptr = self.free_page_list;
+          self.free_page_list = page_after_this;
+        } else { // no spare mem; alloc!
+          let fresh_page =
+            alloc(Layout::from_size_align_unchecked(4096, 1));
+          *page_ptr = fresh_page.cast();
+        }
+        // set up page header and serve a slice right away!
+        *(*page_ptr).cast::<PageHeaderData>() = PageHeaderData(0b10);
+        control_item = MemorySlabControlItem::init(
+          (*page_ptr).cast(), 1, slab_size);
+        return control_item;
+      } }
+      // is it possible to count trailing_ones as a single
+      // bitwise op ?
+      fence(Ordering::AcqRel);
+      let page_header_ref = unsafe {
+        &mut *(*page_ptr).cast::<AtomicU64>() };
+      let mut page_header_ =
+        page_header_ref.load(Ordering::Acquire);
+      let mut free_slab_index: u64;
+      let mut page_header: PageHeaderData;
+      'spininng : loop {
+        page_header = PageHeaderData(page_header_);
+        offset = page_header.get_occupation_map().trailing_ones();
+        free_slab_index = 1 << offset;
+        // may encounter full page
+        let is_full = free_slab_index >= full_mask;
+        if is_full {
+          // this page is full, detach it!
+          let _ = page_header_ref.fetch_or(1, Ordering::Relaxed);
+          *page_ptr = null_mut();
+          continue 'paging;
+        }
+        let new = page_header_ | free_slab_index;
+        let outcome =
+          page_header_ref.compare_exchange_weak(
+            page_header_, new,
+            Ordering::Release, Ordering::Relaxed);
+        match outcome {
+          Ok(_) => break 'paging,
+          Err(actual) => {
+            // someone updated the header
+            if free_slab_index & actual == 0 {
+              // but if it was caused by sombody releasing the memory
+              // then there is no conflict
+              let _ = page_header_ref.fetch_or(
+                free_slab_index, Ordering::Relaxed); // Release ???
+              break 'paging;
+            };
+            page_header_ = actual;
+            continue 'spininng;
+          },
+        }
       }
     }
-    if page_header.occupation_map == u32::MAX {
-      // whoa! this page is full, detach it!
-      let _ = page_header_ref.fetch_xor(
-        1 << 32, Ordering::Relaxed);
-      *page_ptr = null_mut();
-    }
-    let slab_ptr = unsafe {
-      (*page_ptr).cast::<u64>()
-      .add(mult * offset as usize).cast::<()>()
-    };
     control_item =
       MemorySlabControlItem::init(
-        slab_ptr, free_slab_index as u8, slab_size);
+        (*page_ptr).cast(), offset as u8, slab_size);
     return control_item;
   }
   pub fn release_memory(
     &mut self, control_item: MemorySlabControlItem
   ) { unsafe {
     let index = 1 << control_item.project_index();
-    let ptr = control_item.project_ptr();
+    let ptr = control_item.project_base_ptr();
     let header = &mut *ptr.cast::<AtomicU64>();
     let previous = header.fetch_xor(index, Ordering::Relaxed);
     if previous ^ index == transmute(ORPHAN_PAGE) { // hell, yeah! free page
@@ -156,6 +156,9 @@ impl Drop for GranularSlabAllocator {
       //total_of_released_pages += 1;
     }
     if self.b128_page_ptr != null_mut {
+      let slab =
+        *self.b128_page_ptr.cast::<PageHeaderData>();
+      println!("{:#064b}", slab.get_occupation_map());
       dealloc(self.b128_page_ptr.cast(), page_layout);
       //total_of_released_pages += 1;
     }
@@ -182,12 +185,12 @@ impl MemorySlabControlItem {
     slab_ptr: *mut (), index: u8, slab_size: SlabSize
   ) -> Self { unsafe {
     let sized = ((slab_ptr as u64) << 2) +
-      ((transmute::<_, u8>(slab_size) & ((1 << 2) - 1)) as u64 );
+      ((transmute::<_, u8>(slab_size) & ((1 << 2) - 1) as u8) as u64 );
     let indexed =
-      (sized << 6) + (index & ((1 << 6) - 1)) as u64;
+      (sized << 6) + (index & ((1 << 6) - 1) as u8) as u64;
     return Self(indexed)
   } }
-  pub fn inject_parent_frame_ptr(&self, parent_ptr: *mut ()) {
+  pub fn inject_parent_frame(&self, parent_ptr: MemorySlabControlItem) {
     let size = self.project_size();
     let offset = match size {
       SlabSize::Bytes128 => 120usize,
@@ -196,17 +199,29 @@ impl MemorySlabControlItem {
     };
     unsafe {
       let ptr =
-        self.project_ptr().cast::<u8>().add(offset);
-      *ptr.cast::<*mut ()>() = parent_ptr;
+        self.project_slab_ptr().cast::<u8>().add(offset);
+      *ptr.cast::<MemorySlabControlItem>() = parent_ptr;
     }
   }
   pub fn project_size(&self) -> SlabSize {
-    unsafe { transmute(((self.0 >> 6) as u8) & ((1 << 2) - 1)) }
+    unsafe { transmute(((self.0 >> 6) as u8) & (((1 << 2) - 1)) as u8) }
   }
   pub fn project_index(&self) -> u8 {
-    (self.0 as u8) & ((1 << 6) - 1)
+    (self.0 as u8) & (((1 << 6) - 1) as u8)
   }
-  pub fn project_ptr(&self) -> *mut () {
+  pub fn project_base_ptr(&self) -> *mut () {
     (self.0 >> 8) as *mut _
+  }
+  pub fn project_slab_ptr(&self) -> *mut () {
+    let size = match self.project_size() {
+      SlabSize::Bytes128 => 1,
+      SlabSize::Bytes256 => 2,
+      SlabSize::Bytes512 => 4,
+    };
+    let index = self.project_index() as usize;
+    let base_ptr = self.project_base_ptr();
+    return unsafe {
+      base_ptr.cast::<[u64;16]>()
+      .add(index * size).cast::<()>() }
   }
 }

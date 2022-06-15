@@ -5,6 +5,26 @@ use crate::preliminaries::mini_vector::SomeInlineVector;
 
 use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 
+// Task interface
+// enum ActionChain {
+
+//   // just single step of computation
+//   Step(fn (TaskFrameHandle) -> Self),
+
+//   // used to spawn subtasks
+//   Fanout(fn (TaskFrameHandle, TaskGroupHandle) -> Self),
+
+//   // this will get scheduled nondeterministically
+//   // to check if all dependencies were resolved
+//   ProgressCheck(fn (TaskFrameHandle) -> Self),
+
+//   // marks the endpoint of task lifetime.
+//   // if task didnt inherit its frame from parrent
+//   // and instead requested fresh one, then
+//   // here it signals to release the resource
+//   Completion { should_delete_frame: bool },
+
+// }
 
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum LinkKind {
@@ -13,7 +33,7 @@ pub enum LinkKind {
 }
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum DataFrameSize {
-  Absent, Bytes128, Bytes256, Bytes512
+  Absent, Bytes120, Bytes248, Bytes504
 }
 
 pub struct TaskGroupHandle<'i>(
@@ -38,9 +58,9 @@ impl TaskFrameHandle {
     if size_of::<T>() > size {
       panic!("Attempt to interpret task frame as object that is bigger then frame itself");
     }
-    return unsafe { &mut *self.0.project_ptr().cast::<T>() }
+    return unsafe { &mut *self.0.project_slab_ptr().cast::<T>() }
   }
-  pub fn get_parrent_frame(&self) -> *mut () {
+  pub fn get_parrent_frame(&self) -> Option<Self> {
     let size = self.0.project_size();
     let offset = match size {
       SlabSize::Bytes128 => 120usize,
@@ -49,9 +69,10 @@ impl TaskFrameHandle {
     };
     unsafe {
       let ptr =
-        self.0.project_ptr().cast::<u8>().add(offset);
-      let ptr = *ptr.cast::<u64>();
-      return ptr as *mut ();
+        self.0.project_slab_ptr().cast::<u8>().add(offset);
+      let frame = *ptr.cast::<MemorySlabControlItem>();
+      if frame.is_null() { return None }
+      return Some(Self(frame));
     }
   }
 }

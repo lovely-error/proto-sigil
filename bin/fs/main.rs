@@ -51,7 +51,7 @@ fn main () {
     ActionPtr::make_link(LinkKind::Step, begin);
   let work_graph =
     ActionPtr::init(
-      DataFrameSize::Bytes128, init);
+      DataFrameSize::Bytes120, init);
 
   let start = SystemTime::now();
   let w = WorkGroupRef::init(6, work_graph);

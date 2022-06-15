@@ -1,8 +1,9 @@
 
 
 use std::{
-  alloc::dealloc, mem::{size_of, align_of}, time::{SystemTime},
-  intrinsics::{transmute}, ops::Shl, sync::{atomic::{AtomicU64, Ordering, AtomicBool}, Mutex}, ptr::addr_of_mut};
+  alloc::dealloc, mem::{size_of,}, time::{SystemTime},
+  intrinsics::{transmute},
+  sync::{atomic::{AtomicU64, Ordering, AtomicBool}}, ptr::addr_of_mut};
 
 use proto_sigil::elaborator::{
   action_chain::{
@@ -82,7 +83,7 @@ fn must_work () {
     ActionPtr::make_link(LinkKind::Step, begin);
   let work_graph =
     ActionPtr::init(
-      DataFrameSize::Bytes128, init);
+      DataFrameSize::Bytes120, init);
 
   let start = SystemTime::now();
   let w = WorkGroupRef::init(6, work_graph);
@@ -97,10 +98,7 @@ fn must_work () {
 
 //#[test]
 fn byte_order () {
-  let i =
-    PageHeaderData {
-      _padding:[0;3], is_detached: true, occupation_map: 1 };
-  println!("{:#066b}" , unsafe { transmute::<_, u64>(i) });
+  println!("{:#066b}" , 1);
   println!("{:#010b}", 0u8 ^ 1 << 2);
   println!( "{}", (!(1u8 << 2)) .trailing_ones() );
 }
@@ -122,13 +120,13 @@ fn scope () {
 #[test]
 fn children_see_parrents() {
   struct Ctx { str: String, done: AtomicBool }
-  fn step2(tf : TaskFrameHandle) -> ActionPtr { unsafe {
-    let pf = tf.get_parrent_frame();
-    let parent_frame = &mut *pf.cast::<Ctx>();
+  fn step2(tf : TaskFrameHandle) -> ActionPtr {
+    let pf = tf.get_parrent_frame().unwrap();
+    let parent_frame = pf.interpret_frame::<Ctx>();
     println!("{}", parent_frame.str);
     parent_frame.done.store(true, Ordering::Relaxed);
     return ActionPtr::make_completion(true);
-  } }
+  }
   fn deleter(_ : TaskFrameHandle) -> ActionPtr {
     return ActionPtr::make_completion(true);
   }
@@ -144,7 +142,7 @@ fn children_see_parrents() {
     let p = ActionPtr::make_link(
       LinkKind::Step, step2);
     let p = ActionPtr::init(
-        DataFrameSize::Bytes128, p);
+        DataFrameSize::Bytes120, p);
     tg.assign_work(p);
     return ActionPtr::make_progress_checker(checker);
   }
@@ -159,7 +157,7 @@ fn children_see_parrents() {
   let ptr =
     ActionPtr::make_link(LinkKind::Step, step1);
   let ptr = ActionPtr::init(
-    DataFrameSize::Bytes128, ptr);
+    DataFrameSize::Bytes120, ptr);
 
   let start = SystemTime::now();
   let w = WorkGroupRef::init(1, ptr);
