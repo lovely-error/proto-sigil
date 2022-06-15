@@ -100,7 +100,7 @@ impl GranularSlabAllocator {
           *page_ptr = null_mut();
           continue 'paging;
         }
-        let new = page_header_ | free_slab_index;
+        let new = page_header_ ^ free_slab_index;
         let outcome =
           page_header_ref.compare_exchange_weak(
             page_header_, new,
@@ -112,7 +112,7 @@ impl GranularSlabAllocator {
             if free_slab_index & actual == 0 {
               // but if it was caused by sombody releasing the memory
               // then there is no conflict
-              let _ = page_header_ref.fetch_or(
+              let _ = page_header_ref.fetch_xor(
                 free_slab_index, Ordering::Relaxed); // Release ???
               break 'paging;
             };
@@ -134,7 +134,8 @@ impl GranularSlabAllocator {
     let ptr = control_item.project_base_ptr();
     let header = &mut *ptr.cast::<AtomicU64>();
     let previous = header.fetch_xor(index, Ordering::Relaxed);
-    if previous ^ index == transmute(ORPHAN_PAGE) { // hell, yeah! free page
+    let xored = previous ^ index;
+    if xored == transmute(ORPHAN_PAGE) { // hell, yeah! free page
       *ptr.cast::<*mut ()>() = self.free_page_list;
       self.free_page_list = ptr;
     }
@@ -156,9 +157,6 @@ impl Drop for GranularSlabAllocator {
       //total_of_released_pages += 1;
     }
     if self.b128_page_ptr != null_mut {
-      let slab =
-        *self.b128_page_ptr.cast::<PageHeaderData>();
-      println!("{:#064b}", slab.get_occupation_map());
       dealloc(self.b128_page_ptr.cast(), page_layout);
       //total_of_released_pages += 1;
     }

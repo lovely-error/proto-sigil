@@ -5,7 +5,7 @@
   "editor.wordWrap": "wordWrapColumn",
   "editor.wordWrapColumn": 80,
   "lldb.showDisassembly": "auto",
-  "lldb.dereferencePointers": true,
+  "lldb.dereferencePointers": false,
   "lldb.consoleMode": "commands",
   "lldb.displayFormat": "auto",
 }
