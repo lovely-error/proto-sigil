@@ -9,7 +9,7 @@ use std::{
 use crate::{elaborator::{
   frame_allocator::{GranularSlabAllocator, SlabSize, PageHeaderData},
   action_chain::{DataFrameSize, TaskFrameHandle}},
-  preliminaries::mini_vector::InlineVector};
+  support_structures::mini_vector::InlineVector};
 
 use super::{
   action_chain::{Task, LinkKind, ActionPtr, TaskGroupHandle},
@@ -259,6 +259,9 @@ fn elab_worker_task_loop
               },
               DataFrameSize::Bytes504 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes512)
+              },
+              DataFrameSize::Bytes56 => {
+                task_frame_allocator.acquire_memory(SlabSize::Bytes64)
               },
             };
             // put a ptr to a parrent frame into any child that

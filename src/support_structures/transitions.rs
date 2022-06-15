@@ -1,4 +1,4 @@
-use crate::preliminaries::{redefinitions::*, monad::*};
+use crate::support_structures::{redefinitions::*, monad::*};
 
 
 impl <X, Y, I> Transient<X, Either<Y, I>> for Either<Y, X> {

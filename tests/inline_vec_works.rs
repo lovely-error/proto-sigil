@@ -1,5 +1,5 @@
 extern crate proto_sigil;
-use proto_sigil::preliminaries::mini_vector::InlineVector;
+use proto_sigil::support_structures::mini_vector::InlineVector;
 use std::mem::size_of;
 
 #[test]

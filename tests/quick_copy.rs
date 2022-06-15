@@ -1,4 +1,5 @@
-use proto_sigil::{preliminaries::mini_vector::InlineVector, elaborator::worker::LoopData};
+use proto_sigil::{
+  support_structures::mini_vector::InlineVector, elaborator::worker::LoopData};
 
 
 #[test]

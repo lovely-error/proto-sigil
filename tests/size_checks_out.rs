@@ -1,10 +1,10 @@
 
-use std::{mem::size_of, thread::JoinHandle};
+use std::{mem::size_of};
 
 use proto_sigil::{trees::raw_syntax_nodes::{
   AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr},
   parser::parser::symbol::Symbol, elaborator::{worker::LoopQueue,
-    action_chain::Task}, preliminaries::mini_vector::InlineVector};
+    action_chain::Task}, support_structures::mini_vector::InlineVector};
 
 #[test]
 fn size_of_symbol_is_8_bytes () {
@@ -36,18 +36,23 @@ fn size_of_imp_ctx_item () {
   println!("{}", size_of::<(Symbol, Option<ExprPtr>)>());
 }
 
-
-// #[test]
-// fn huh2 () {
-//   let fun =
-//     Box::new(|| { println!("yo"); RequestSTM::init_null() });
-//   let thing = RequestSTM::init_from_boxed_closure(fun);
-//   thing.invoke();
-// }
-
 #[test]
 fn loop_size () {
   println!("{}", size_of::<LoopQueue<()>>())
 }
 
+#[test]
+fn task_size () {
+  assert_eq!(size_of::<Task>(), 16)
+}
 
+#[test]
+fn iv_size () {
+  assert_eq!(size_of::<InlineVector::<0, ()>>(), 16)
+}
+
+// #[test]
+// fn th_size () {
+//  use std::thread::JoinHandle;
+//   println!("{}", size_of::<JoinHandle<()>>())
+// }

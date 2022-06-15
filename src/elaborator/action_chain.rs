@@ -1,7 +1,7 @@
 
 use std::{intrinsics::transmute, mem::size_of};
 
-use crate::preliminaries::mini_vector::SomeInlineVector;
+use crate::support_structures::mini_vector::SomeInlineVector;
 
 use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 
@@ -33,7 +33,7 @@ pub enum LinkKind {
 }
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum DataFrameSize {
-  Absent, Bytes120, Bytes248, Bytes504
+  Absent, Bytes120, Bytes248, Bytes504, Bytes56
 }
 
 pub struct TaskGroupHandle<'i>(
@@ -51,9 +51,10 @@ impl TaskFrameHandle {
   pub fn interpret_frame<T>(&self) -> &mut T {
     let size = self.0.project_size();
     let size = match size {
-      SlabSize::Bytes128 => 128,
-      SlabSize::Bytes256 => 256,
-      SlabSize::Bytes512 => 512,
+      SlabSize::Bytes64 => 56,
+      SlabSize::Bytes128 => 120,
+      SlabSize::Bytes256 => 248,
+      SlabSize::Bytes512 => 504,
     };
     if size_of::<T>() > size {
       panic!("Attempt to interpret task frame as object that is bigger then frame itself");
@@ -63,7 +64,8 @@ impl TaskFrameHandle {
   pub fn get_parrent_frame(&self) -> Option<Self> {
     let size = self.0.project_size();
     let offset = match size {
-      SlabSize::Bytes128 => 120usize,
+      SlabSize::Bytes64 => 56usize,
+      SlabSize::Bytes128 => 120,
       SlabSize::Bytes256 => 248,
       SlabSize::Bytes512 => 504,
     };

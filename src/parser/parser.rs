@@ -3,7 +3,7 @@ use std::mem::{size_of};
 use std::ptr::{null_mut};
 use crate::parser::parser::symbol::{Symbol, Repr};
 use crate::{ throw, guard };
-use crate::preliminaries::monad::{
+use crate::support_structures::monad::{
   fail_with_aux_gen_ctx_intro};
 use crate::parser::node_allocator::NodeSlabSizeInBytes;
 
@@ -261,7 +261,7 @@ use crate::trees::raw_syntax_nodes::{
   CompoundPatternNode_ArgsInline, RefPatternNode,
   CompoundPatternNode_ArgsIndiSlab, RewriteRule, Definition, DeclPtr, Mapping,
   LiftNodeItem, LiftNode, RawCtxPtr, WitnessNodeIndirect};
-use crate::preliminaries::mini_vector::InlineVector;
+use crate::support_structures::mini_vector::InlineVector;
 use super::node_allocator::{SlabAllocator, EntangledPtr};
 
 

@@ -9,22 +9,27 @@ use proto_sigil::elaborator::{
     ActionPtr, LinkKind, DataFrameSize, TaskGroupHandle, TaskFrameHandle },
   worker::{WorkGroupRef, WorkGroup},};
 
+
+static mut FLAG : bool = false;
+
 struct Example(bool);
 impl Drop for Example {
   fn drop(&mut self) {
-    println!("Eh, you dropped garbage, my friend...")
+    unsafe { FLAG = true };
   }
 }
 
-//#[test]
+#[test]
 fn drop_on_ptrs () {
   use std::alloc::{alloc, Layout};
 
   unsafe {
     let lay = Layout::new::<Example>();
     let mem_ptr = alloc(lay);
-    //*mem_ptr.cast::<Example>() = Example(true);
-    mem_ptr.cast::<Example>().write(Example(true));
+    *mem_ptr.cast::<Example>() = Example(true);
+    // this does mean that writing through ptr may drop garbage.
+    assert_eq!(FLAG, true);
+    //mem_ptr.cast::<Example>().write(Example(true));
     dealloc(mem_ptr, lay);
   };
 }
@@ -55,7 +60,7 @@ fn must_work () {
       handle.assign_work(work_item);
     };
     fn checker(tf : TaskFrameHandle) -> Option<ActionPtr> {
-      println!("Condition checker pocked!");
+      //println!("Condition checker pocked!");
       let ctx = tf.interpret_frame::<Ctx>();
       let count = ctx.counter.load(Ordering::Relaxed);
       if count == Limit {
@@ -66,15 +71,16 @@ fn must_work () {
     return ActionPtr::make_progress_checker(checker);
   }
   fn done(tf : TaskFrameHandle) -> ActionPtr {
-    println!("you have gazed at miracles!");
+    //println!("you have gazed at miracles!");
     let ctx = tf.interpret_frame::<Ctx>();
-    println!("{}", ctx.counter.load(Ordering::Relaxed));
+    //println!("{}", ctx.counter.load(Ordering::Relaxed));
+    assert_eq!(ctx.counter.load(Ordering::Relaxed), Limit);
     return ActionPtr::make_completion(true);
   }
   fn begin(tf : TaskFrameHandle) -> ActionPtr {
     let ctx = tf.interpret_frame::<Ctx>();
     ctx.counter = AtomicU64::new(0);
-    println!("Greetings!\nWitness the swarm!");
+    //println!("Greetings!\nWitness the swarm!");
     return ActionPtr::make_fanout(swarm_setup_shim);
   }
 
@@ -84,13 +90,13 @@ fn must_work () {
     ActionPtr::init(
       DataFrameSize::Bytes120, init);
 
-  let start = SystemTime::now();
+  // let start = SystemTime::now();
   let w = WorkGroupRef::init(6, work_graph);
   w.await_completion();
-  let finish = SystemTime::now();
-  let diff =
-    finish.duration_since(start).unwrap();
-  println!("Micros : {}", diff.as_micros());
+  // let finish = SystemTime::now();
+  // let diff =
+  //   finish.duration_since(start).unwrap();
+  // println!("Micros : {}", diff.as_micros());
 
 }
 
@@ -122,7 +128,8 @@ fn children_see_parrents() {
   fn step2(tf : TaskFrameHandle) -> ActionPtr {
     let pf = tf.get_parrent_frame().unwrap();
     let parent_frame = pf.interpret_frame::<Ctx>();
-    println!("{}", parent_frame.str);
+    //println!("{}", parent_frame.str);
+    assert_eq!(parent_frame.str, "I do exist!");
     parent_frame.done.store(true, Ordering::Relaxed);
     return ActionPtr::make_completion(true);
   }
@@ -141,7 +148,7 @@ fn children_see_parrents() {
     let p = ActionPtr::make_link(
       LinkKind::Step, step2);
     let p = ActionPtr::init(
-        DataFrameSize::Bytes120, p);
+        DataFrameSize::Bytes56, p);
     tg.assign_work(p);
     return ActionPtr::make_progress_checker(checker);
   }
@@ -156,14 +163,15 @@ fn children_see_parrents() {
   let ptr =
     ActionPtr::make_link(LinkKind::Step, step1);
   let ptr = ActionPtr::init(
-    DataFrameSize::Bytes120, ptr);
+    DataFrameSize::Bytes56, ptr);
 
-  let start = SystemTime::now();
+  // let start = SystemTime::now();
   let w = WorkGroupRef::init(1, ptr);
   w.await_completion();
-  let finish = SystemTime::now();
-  let diff =
-    finish.duration_since(start).unwrap();
-  println!("Micros : {}", diff.as_micros());
+  // let finish = SystemTime::now();
+  // let diff =
+    // finish.duration_since(start).unwrap();
+  // println!("Micros : {}", diff.as_micros());
 
 }
+

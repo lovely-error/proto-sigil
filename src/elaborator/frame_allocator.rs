@@ -25,6 +25,7 @@ const ORPHAN_PAGE : PageHeaderData = PageHeaderData(1);
 
 pub struct GranularSlabAllocator {
   pub free_page_list: *mut (),
+  pub b64_page_ptr: *mut (),
   pub b128_page_ptr: *mut (),
   pub b256_page_prt: *mut (),
   pub b512_page_ptr: *mut (),
@@ -32,12 +33,13 @@ pub struct GranularSlabAllocator {
 
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum SlabSize {
-  Bytes128, Bytes256, Bytes512
+  Bytes128, Bytes256, Bytes512, Bytes64
 }
 impl GranularSlabAllocator {
   pub fn init_new() -> Self {
     Self { free_page_list: null_mut(), b128_page_ptr: null_mut(),
-           b256_page_prt: null_mut(), b512_page_ptr: null_mut() }
+           b256_page_prt: null_mut(), b512_page_ptr: null_mut(),
+           b64_page_ptr: null_mut() }
   }
   pub fn acquire_memory(
     &mut self,
@@ -58,6 +60,10 @@ impl GranularSlabAllocator {
       SlabSize::Bytes512 => {
         page_ptr = &mut self.b512_page_ptr;
         full_mask = (1 << 8) - 1;
+      },
+      SlabSize::Bytes64 => {
+        page_ptr = &mut self.b64_page_ptr;
+        full_mask = !0u64;
       },
     }
     let mut offset: u32;
@@ -194,6 +200,7 @@ impl MemorySlabControlItem {
       SlabSize::Bytes128 => 120usize,
       SlabSize::Bytes256 => 248,
       SlabSize::Bytes512 => 504,
+      SlabSize::Bytes64 => 56,
     };
     unsafe {
       let ptr =
@@ -212,14 +219,15 @@ impl MemorySlabControlItem {
   }
   pub fn project_slab_ptr(&self) -> *mut () {
     let size = match self.project_size() {
-      SlabSize::Bytes128 => 1,
-      SlabSize::Bytes256 => 2,
-      SlabSize::Bytes512 => 4,
+      SlabSize::Bytes64 => 1,
+      SlabSize::Bytes128 => 2,
+      SlabSize::Bytes256 => 4,
+      SlabSize::Bytes512 => 8,
     };
     let index = self.project_index() as usize;
     let base_ptr = self.project_base_ptr();
     return unsafe {
-      base_ptr.cast::<[u64;16]>()
+      base_ptr.cast::<[u64;8]>()
       .add(index * size).cast::<()>() }
   }
 }

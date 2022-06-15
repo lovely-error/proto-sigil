@@ -1,5 +1,5 @@
 
-use crate::preliminaries::redefinitions::{Either};
+use crate::support_structures::redefinitions::{Either};
 
 pub trait Failable<Failure> {
   fn init_with_failure(failure: Failure) -> Self;
