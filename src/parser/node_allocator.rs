@@ -13,6 +13,12 @@ const NodePageCapacity : u16 = 4096 / NodeSlabSizeInBytes as u16 ;
 #[derive(Debug, Copy, Clone)]
 pub struct EntangledPtr(pub i32);
 impl EntangledPtr {
+  pub fn init_null() -> Self {
+    Self(0)
+  }
+  pub fn is_null(&self) -> bool {
+    self.0 == 0
+  }
   pub fn from_ptr_pair(
     origin: *mut (),
     referent: *mut ()

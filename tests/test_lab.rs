@@ -2,7 +2,7 @@
 
 use std::{
   alloc::dealloc, mem::{size_of,}, time::{SystemTime},
-  sync::{atomic::{AtomicU64, Ordering, AtomicBool}}, ptr::addr_of_mut};
+  sync::{atomic::{AtomicU64, Ordering, AtomicBool}}, ptr::addr_of_mut, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher};
 
 use proto_sigil::elaborator::{
   action_chain::{
@@ -175,3 +175,20 @@ fn children_see_parrents() {
 
 }
 
+
+#[test]
+fn p () {
+  let str = "aoao".to_string();
+  let str2 = "oaoa".to_string();
+  let mut hasher = DefaultHasher::new();
+  str.hash(&mut hasher);
+  let hash1 = hasher.finish();
+  println!("{}", hash1);
+  let mut hasher = DefaultHasher::new();
+  str2.hash(&mut hasher);
+  let hash2 = hasher.finish();
+  println!("{}", hash2);
+
+  println!("Rem {}", hash1 % 32);
+  println!("Rem {}", hash2 % 32);
+}
