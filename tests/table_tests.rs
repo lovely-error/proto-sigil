@@ -1,13 +1,18 @@
 use std::{time::SystemTime, collections::HashMap, mem::MaybeUninit, thread::{JoinHandle, self}, ptr::addr_of};
 
-use proto_sigil::elaborator::environment::PersistentTable;
+use proto_sigil::elaborator::environment::PasteboardTable;
 
 
 #[test]
 fn inout_preservation () {
-  const Limit: u64 = 5000;
+  // Performance of retrieving in PasteboardTable
+  // degrades more when input is too big, if compared to
+  // HashMap.
+  // Table behave better on insertions since it
+  // does not rellocate storage
+  const Limit: u64 = 100_000;
   let table =
-    PersistentTable::<u64, u64>::init();
+    PasteboardTable::<u64, u64>::init();
   let start = SystemTime::now();
   for i in 0 .. Limit {
     table.insert(&i, i)
@@ -84,3 +89,46 @@ fn inout_preservation () {
 //     assert!(i == *item as usize);
 //   }
 // } }
+
+//#[test]
+fn random_access_performance () {
+  // Pasteboard retrieving operation on random keys on
+  // not too big amounts has pretty acceptable
+  // performance.
+  const Limit: u64 = 5000;
+  let table =
+    PasteboardTable::<u64, u64>::init();
+  for i in 0 .. Limit {
+    table.insert(&i, i)
+  }
+  table.freeze();
+  let start = SystemTime::now();
+  let mut ix : u64 = 8_093_057_678_145_770_544;
+  for _ in 0 .. Limit {
+    ix = ix.rotate_left(3);
+    let random_key = ix % Limit;
+    let _ = table.retrieve_ref(&random_key);
+  }
+  let end = SystemTime::now();
+  println!(
+    "Table retrieving ended in {} ms",
+    end.duration_since(start).unwrap().as_millis());
+
+
+  let mut map = HashMap::<u64, u64>::new();
+
+  for i in 0 .. Limit {
+    map.insert(i, i);
+  }
+
+  let start = SystemTime::now();
+  for _ in 0 .. Limit {
+    ix = ix.rotate_left(3);
+    let random_key = ix % Limit;
+    let _ = map.get(&random_key);
+  }
+  let end = SystemTime::now();
+  println!(
+    "Map retrieving ended in {} ms", end.duration_since(start).unwrap().as_millis());
+}
+

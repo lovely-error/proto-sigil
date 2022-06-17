@@ -9,15 +9,8 @@ use std::{
 use crate::parser::node_allocator::EntangledPtr;
 
 
-// Concurrently accessible for writes and reads, but
-// only if they dont overlap.
-// Inteded use is to proceed in two stages.
-// In first stage, multiple threads populate this
-// object, then freeze it. Reads do not occure at this stage.
-// After freezing, mutation of this object is forbiden.
-// In second stage multiple threads may read it without fear of
-// of getting corrupted data.
-pub struct PersistentTable<Key: Hash, Value> {
+// Associative table that is concurrently accessible for writes and reads.
+pub struct PasteboardTable<Key: Hash, Value> {
   head_ptr: *mut (),
   least_crowded_page_ptr: AtomicU64,
   is_frozen: AtomicBool,
@@ -45,8 +38,20 @@ impl BucketHeader {
   }
 }
 
+pub enum Fetch<T> {
+  Fenced, NotFound, Value(T)
+}
+impl <T> Fetch<T> {
+  pub fn unwrap(self) -> T {
+    match self {
+      Fetch::Fenced => panic!("Not a value"),
+      Fetch::NotFound => panic!("Not a value"),
+      Fetch::Value(val) => val,
+    }
+  }
+}
 
-impl <K: Hash, V> PersistentTable<K, V> {
+impl <K: Hash, V> PasteboardTable<K, V> {
   fn allocate_bucket() -> *mut () { unsafe {
     let layout =
       Layout::from_size_align_unchecked(
@@ -95,8 +100,11 @@ impl <K: Hash, V> PersistentTable<K, V> {
     return occupation_map.bank_is_empty();
   } }
   pub fn freeze(&self) {
-    self.is_frozen.store(true, Ordering::Relaxed)
+    self.is_frozen.store(true, Ordering::Relaxed);
+    self.least_crowded_page_ptr.store(0, Ordering::Relaxed);
   }
+  // O(1 + k)
+  // Most of the time k is 0
   pub fn insert(&self, key: &K, value: V) { unsafe {
     if self.is_frozen.load(Ordering::Relaxed) {
       panic!("Cant insert into frozen table!");
@@ -146,11 +154,17 @@ impl <K: Hash, V> PersistentTable<K, V> {
     .add(1 + offset as usize).write((hash, value));
 
   } }
-
-  pub fn retrieve_ref(&self, key: &K) -> Option<&V> { unsafe {
-    if !self.is_frozen.load(Ordering::Relaxed) {
-      panic!("Table cannot be read in unfrozen state")
-    };
+  // O(n / 31 - k)
+  // Sensitive to the how far from head the retrieved item is.
+  // The farther it is, the worse performance this operation has.
+  // If rust had 16 byte atomics the complexity could be lowered
+  // to O(n / 123 - k).
+  // And if simd were stable, completely defferent design
+  // would be possible.
+  pub fn retrieve_ref(&self, key: &K) -> Fetch<&V> { unsafe {
+    // if !self.is_frozen.load(Ordering::Relaxed) {
+    //   panic!("Table cannot be read in unfrozen state")
+    // };
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
     let hash = hasher.finish();
@@ -160,6 +174,12 @@ impl <K: Hash, V> PersistentTable<K, V> {
 
     let mut bucket_ptr = self.head_ptr;
     loop {
+      let at_mutating_bucket =
+        bucket_ptr ==
+        self.least_crowded_page_ptr.load(Ordering::Relaxed) as *mut ();
+      if at_mutating_bucket {
+        return Fetch::Fenced;
+      }
       let header = &*bucket_ptr.cast::<AtomicU64>();
       let header =
         transmute::<_, BucketHeader>(header.load(Ordering::Relaxed));
@@ -169,11 +189,11 @@ impl <K: Hash, V> PersistentTable<K, V> {
         let (stored_key_hash, value) =
           &*bucket_ptr.cast::<(u64, V)>().add(1 + offset as usize);
         if *stored_key_hash == hash {
-          return Some(value);
+          return Fetch::Value(value);
         }
       }
       let next_bucket_ptr = header.project_next_page_eptr();
-      if next_bucket_ptr.is_null() { return None; };
+      if next_bucket_ptr.is_null() { return Fetch::NotFound; };
       bucket_ptr = next_bucket_ptr.reach_referent_from(bucket_ptr);
     }
 
@@ -181,5 +201,5 @@ impl <K: Hash, V> PersistentTable<K, V> {
 }
 
 
-unsafe impl <K: Hash, V> Send for PersistentTable<K, V> {}
-unsafe impl <K: Hash, V> Sync for PersistentTable<K, V> {}
+unsafe impl <K: Hash, V> Send for PasteboardTable<K, V> {}
+unsafe impl <K: Hash, V> Sync for PasteboardTable<K, V> {}

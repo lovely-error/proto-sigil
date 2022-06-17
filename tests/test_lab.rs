@@ -176,7 +176,7 @@ fn children_see_parrents() {
 }
 
 
-#[test]
+//#[test]
 fn p () {
   let str = "aoao".to_string();
   let str2 = "oaoa".to_string();
@@ -191,4 +191,11 @@ fn p () {
 
   println!("Rem {}", hash1 % 32);
   println!("Rem {}", hash2 % 32);
+
+}
+
+//#[test]
+fn simd () {
+  // use std::simd;
+
 }
