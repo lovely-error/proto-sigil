@@ -4,8 +4,8 @@
   "editor.renderWhitespace": "all",
   "editor.wordWrap": "wordWrapColumn",
   "editor.wordWrapColumn": 80,
-  "lldb.showDisassembly": "auto",
-  "lldb.dereferencePointers": false,
+  "lldb.dereferencePointers": true,
   "lldb.consoleMode": "commands",
   "lldb.displayFormat": "binary",
+  "lldb.showDisassembly": "auto",
 }

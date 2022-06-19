@@ -87,7 +87,7 @@ impl GranularSlabAllocator {
       } }
       // is it possible to count trailing_ones as a single
       // bitwise op ?
-      fence(Ordering::AcqRel);
+      fence(Ordering::SeqCst);
       let page_header_ref = unsafe {
         &mut *(*page_ptr).cast::<AtomicU64>() };
       let mut page_header_ =

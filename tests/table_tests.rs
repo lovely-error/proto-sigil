@@ -1,7 +1,19 @@
-use std::{time::SystemTime, collections::HashMap, mem::MaybeUninit, thread::{JoinHandle, self}, ptr::addr_of};
+use std::{
+  time::{SystemTime,}, collections::HashMap,
+  thread::{spawn}, ptr::addr_of};
 
 use proto_sigil::elaborator::environment::PasteboardTable;
 
+
+#[test]
+fn dead_simple_test () {
+  let table =
+    PasteboardTable::<u64, u64>::init();
+  table.insert(&3, 17);
+  table.freeze();
+  let ret = table.retrieve_ref(&3);
+  assert!(*ret.unwrap() == 17);
+}
 
 #[test]
 fn inout_preservation () {
@@ -10,7 +22,7 @@ fn inout_preservation () {
   // HashMap.
   // Table behave better on insertions since it
   // does not rellocate storage
-  const Limit: u64 = 100_000;
+  const Limit: u64 = 5000;
   let table =
     PasteboardTable::<u64, u64>::init();
   let start = SystemTime::now();
@@ -21,7 +33,9 @@ fn inout_preservation () {
   println!(
     "Table insertions ended in {} ms",
     end.duration_since(start).unwrap().as_millis());
+
   table.freeze();
+
   let start = SystemTime::now();
   for i in 0 .. Limit {
     let smth = table.retrieve_ref(&i);
@@ -54,43 +68,76 @@ fn inout_preservation () {
     "Map retrieving ended in {} ms", end.duration_since(start).unwrap().as_millis());
 }
 
-// #[test]
-// fn concurent_writing () { unsafe {
-//   let table =
-//     PersistentTable::<u64, u64>::init();
-//   let table_ref = addr_of!(table) as u64;
+#[test]
+fn concurent_insertions () { unsafe {
+  for k in 0 .. 100 {
+    let table =
+      PasteboardTable::<u64, u64>::init();
 
-//   let mut th: [MaybeUninit<JoinHandle<()>> ; 4] =
-//     MaybeUninit::uninit().assume_init();
-//   for i in 0 .. 4 {
-//     let copy = table_ref;
-//     let thread = thread::spawn(move || {
-//       for i in 0 .. 100 {
-//         (&*(copy as *const PersistentTable<u64, u64>))
-//         .insert(&i, i);
-//       }
-//     });
-//     th.as_mut_ptr().add(i).cast::<JoinHandle<()>>().write(thread);
-//   }
-//   for thread in th.into_iter() {
-//     let th = thread.assume_init();
-//     let _ = th.join().unwrap();
-//   }
-//   table.freeze();
-//   let mut vec = Vec::<u64>::new();
-//   vec.reserve(400);
-//   for i in 0 .. 400 {
-//     let item = table.retrieve_ref(&i).unwrap();
-//     vec.push(*item);
-//   }
-//   vec.sort();
-//   for i in 0 .. 400 {
-//     let item = vec.get(i).unwrap();
-//     assert!(i == *item as usize);
-//   }
-// } }
+    let start = SystemTime::now();
+    let threads = [
+      {
+        let ref_copy = addr_of!(table) as u64;
+        spawn(move ||{
+          for i in 0 .. 100u64 {
+            (&*(ref_copy as *mut PasteboardTable<u64, u64>))
+            .insert(&i, i);
+          }
+        })
+      },
+      {
+        let ref_copy = addr_of!(table) as u64;
+        spawn(move ||{
+          for i in 100 .. 200u64 {
+            (&*(ref_copy as *mut PasteboardTable<u64, u64>))
+            .insert(&i, i);
+          }
+        })
+      },
+      {
+        let ref_copy = addr_of!(table) as u64;
+        spawn(move ||{
+          for i in 200 .. 300u64 {
+            (&*(ref_copy as *mut PasteboardTable<u64, u64>))
+            .insert(&i, i);
+          }
+        })
+      },
+      {
+        let ref_copy = addr_of!(table) as u64;
+        spawn(move ||{
+          for i in 300 .. 400u64 {
+            (&*(ref_copy as *mut PasteboardTable<u64, u64>))
+            .insert(&i, i);
+          }
+        })
+      }
+    ];
+    for thread in threads.into_iter() {
+      let _ = thread.join().unwrap();
+    }
 
-//#[test]
+    println!(
+      "Writing done in {} micros",
+      start.elapsed().unwrap().as_micros());
+
+    table.freeze();
+
+    let mut vec = Vec::<u64>::new();
+    vec.reserve(400);
+    for i in 0 .. 400 {
+      let item = table.retrieve_ref(&i).unwrap();
+      vec.push(*item);
+    }
+    vec.sort();
+    //println!("{:#?}", vec)
+    for i in 0 .. 400u64 {
+      assert!(i == *vec.get(i as usize).unwrap());
+    }
+  }
+} }
+
+#[test]
 fn random_access_performance () {
   // Pasteboard retrieving operation on random keys on
   // not too big amounts has pretty acceptable
@@ -132,3 +179,29 @@ fn random_access_performance () {
     "Map retrieving ended in {} ms", end.duration_since(start).unwrap().as_millis());
 }
 
+
+static mut stunt_drop_count : u16 = 0;
+struct DropStunt(bool);
+impl Drop for DropStunt {
+  fn drop(&mut self) {
+    unsafe { stunt_drop_count += 1 }
+  }
+}
+
+#[test]
+fn drops_correctly () {
+
+  const Limit : u16 = 57;
+
+  let table =
+    PasteboardTable::<u16, DropStunt>::init();
+
+  for i in 0 .. Limit {
+    table.insert(&i, DropStunt(false))
+  }
+
+  drop(table);
+
+  assert!(unsafe { stunt_drop_count } == Limit);
+
+}
