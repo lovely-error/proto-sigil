@@ -4,7 +4,7 @@ use std::{
   hash::{Hash, Hasher}, collections::hash_map::DefaultHasher,
   alloc::{Layout, alloc, dealloc}, mem::{size_of, align_of, needs_drop,},
   sync::atomic::{AtomicU64, Ordering, AtomicBool, fence},
-  ptr::drop_in_place, };
+  ptr::{drop_in_place, null_mut}, };
 
 
 
@@ -36,6 +36,11 @@ impl BucketHeader {
   } }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct UnsyncedBucketHeader {
+  next_bucket_ptr: *mut Self,
+  occupation_map: u64,
+}
 
 impl <K: Hash, V> PasteboardTable<K, V> {
   fn allocate_bucket() -> *mut () { unsafe {
@@ -85,14 +90,15 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     ) { unsafe {
       let offset = 1 << index;
       let occupation_map_here =
-        (&*dest.cast::<BucketHeader>())
-        .occupation_map.load(Ordering::Relaxed);
-      let mut source = source;
+        (*dest.cast::<UnsyncedBucketHeader>())
+        .occupation_map;
+      let mut source =
+        source.cast::<UnsyncedBucketHeader>();
       loop {
         if source.is_null() { return; }
         let header =
-          (&*source.cast::<BucketHeader>())
-          .occupation_map.load(Ordering::Relaxed);
+          (&*source.cast::<UnsyncedBucketHeader>())
+          .occupation_map;
         let something_here = (header & offset) != 0;
         if something_here {
           let val =
@@ -102,20 +108,19 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           .add((index + initial_offset) as usize).write(val);
 
           let new_occup_here = occupation_map_here | offset;
-            (&*dest.cast::<BucketHeader>())
-            .occupation_map.store(
-              new_occup_here, Ordering::Relaxed);
+
+          (*dest.cast::<UnsyncedBucketHeader>())
+            .occupation_map = new_occup_here;
 
           let new_map_for_source = header & !offset;
-          (&*source.cast::<BucketHeader>())
-            .occupation_map.store(
-              new_map_for_source, Ordering::Relaxed);
+
+          (*source.cast::<UnsyncedBucketHeader>())
+            .occupation_map = new_map_for_source;
           return ;
         }
         let next =
-          (&*source.cast::<BucketHeader>())
-          .next_bucket_ptr.load(Ordering::Relaxed);
-        source = next as *mut ();
+          (&*source).next_bucket_ptr;
+        source = next;
       }
     } }
 
@@ -125,7 +130,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     }
     let number_of_free_slots =
       64 - (16 / size_of::<(u64, V)>().max(1) as u64);
-    let initial_index = 64 - number_of_free_slots;
+    let index_offset = 64 - number_of_free_slots;
 
     let mut base_ptr = self.head_ptr;
     loop {
@@ -145,7 +150,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
         let free_slot_here = (occupation_map_here & offset) == 0;
         if free_slot_here {
           pull_in::<V>(
-            index, initial_index,
+            index, index_offset,
             base_ptr, drain_bucket_ptr);
         }
         index += 1;
@@ -157,28 +162,33 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     }
   } }
   fn shrink(&self) { unsafe {
-    let mut page_ptr = self.head_ptr;
+    let mut page_ptr =
+      self.head_ptr.cast::<UnsyncedBucketHeader>();
+    let mut cutoff_point : *mut UnsyncedBucketHeader = null_mut();
     loop {
+      let ptr = (*page_ptr).next_bucket_ptr;
+      if ptr.is_null() { return }
       let header =
-        (&*page_ptr.cast::<BucketHeader>())
-        .occupation_map.load(Ordering::Relaxed);
-      if header == 0 { break; }
+        (*ptr).occupation_map;
+      if header == 0 {
+        cutoff_point = (*page_ptr).next_bucket_ptr;
+        (*page_ptr).next_bucket_ptr = null_mut();
+        break;
+      }
       else {
-        let next =
-          (&*page_ptr.cast::<BucketHeader>())
-          .next_bucket_ptr.load(Ordering::Relaxed);
-        if next == 0 { return }
-        page_ptr = next as *mut ();
+        let next = (&*page_ptr).next_bucket_ptr;
+        if next.is_null() { return }
+        page_ptr = next;
       }
     }
     loop {
       let next =
-        (&*page_ptr.cast::<BucketHeader>())
-        .next_bucket_ptr.load(Ordering::Relaxed);
+        (*cutoff_point).next_bucket_ptr;
       dealloc(
-        page_ptr.cast(), BucketHeader::bucket_layout_for::<V>());
-      if next == 0 { return; }
-      page_ptr = next as *mut ();
+        cutoff_point.cast(),
+        BucketHeader::bucket_layout_for::<V>());
+      if next.is_null() { return; }
+      cutoff_point = next;
     }
   } }
   pub fn freeze(&self) {
@@ -186,11 +196,11 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     self.least_crowded_page_ptr.store(0, Ordering::Relaxed);
     fence(Ordering::Release);
     self.compress();
-    //self.shrink();
+    self.shrink();
   }
-  // O(1 + k)
+  // ATC is (1 + k)
   // where k denote some amount of being unlucky.
-  // most of the time is expected to be 0 or low
+  // most of the time k is expected to be 0 or low
   pub fn insert(&self, key: &K, value: V) { unsafe {
     if self.is_frozen.load(Ordering::Relaxed) {
       panic!("Cant insert into frozen table!");
@@ -209,21 +219,20 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     let mut occupation_map: u64;
     let mut header: &BucketHeader;
     'fetching : loop {
+      let mut next;
       loop {
-        fence(Ordering::SeqCst);
         header = &*bucket_ptr.cast::<BucketHeader>();
         occupation_map =
           header.occupation_map.load(Ordering::Relaxed);
+        next =
+          header.next_bucket_ptr.load(Ordering::Relaxed)
+          as *mut ();
 
         let collided = (occupation_map & index) != 0;
         if collided { // goto next bucket
-          fence(Ordering::Acquire);
-          let next =
-            header.next_bucket_ptr.load(Ordering::Relaxed)
-            as *mut ();
+          fence(Ordering::Acquire); // no spec here
           if next.is_null() { // need more storage
             Self::handle_storage_shortage(bucket_ptr);
-            fence(Ordering::Release);
           } else {
             bucket_ptr = next;
           }
@@ -231,12 +240,14 @@ impl <K: Hash, V> PasteboardTable<K, V> {
             occupation_map.count_ones() > 54;
           if page_is_overpopulated {
             // change write ptr to next page
+            fence(Ordering::Release);
+            // page update must be done here
             self.least_crowded_page_ptr.store(
               bucket_ptr as u64, Ordering::Relaxed);
           }
         } else { break }
       }
-      fence(Ordering::SeqCst);
+
       let updated_occupation_map = occupation_map | index;
       let update_outcome =
       header.occupation_map.compare_exchange_weak(
@@ -246,9 +257,17 @@ impl <K: Hash, V> PasteboardTable<K, V> {
         Ok(_) => break 'fetching,
         Err(new) => {
           if (new & index) == 0 {
-            (&*header).occupation_map.fetch_or(
+            let prior = (&*header).occupation_map.fetch_or(
               index, Ordering::Relaxed);
-              //fence(Ordering::Release);
+            if (prior & index) != 0 { // someone did it already, rerun
+              if next.is_null() { // need more storage
+                //fence(Ordering::SeqCst);
+                Self::handle_storage_shortage(bucket_ptr);
+              } else {
+                bucket_ptr = next;
+              }
+              continue 'fetching;
+            };
             break 'fetching;
           } else {
             continue 'fetching;
@@ -256,13 +275,13 @@ impl <K: Hash, V> PasteboardTable<K, V> {
         },
       }
     }
-    fence(Ordering::Release);
+    //fence(Ordering::Release);
     bucket_ptr.cast::<(u64, V)>()
     .add(((64 - number_of_free_slots) + offset) as usize)
     .write((hash, value));
 
   } }
-  // O(n / (63 - m) - k)
+  // ATC is (n / 63 - k)
   // Sensitive to the how far from head item being retrieved is located.
   // The farther it is, the worse performance this operation has.
   // On average, this is not too bad for realistic amounts.
@@ -317,13 +336,13 @@ impl <K: Hash, V> Drop for PasteboardTable<K, V> {
     let number_of_free_slots =
       64 - (16 / size_of::<(u64, V)>().max(1) as u64);
 
-    let mut bucket_ptr = self.head_ptr;
+    let mut bucket_ptr =
+      self.head_ptr.cast::<UnsyncedBucketHeader>();
     'list_release : loop {
-      let header = &*bucket_ptr.cast::<BucketHeader>();
+      let header = *bucket_ptr;
 
       if needs_drop::<V>() {
-        let occupation_map =
-          (&header.occupation_map).load(Ordering::Relaxed);
+        let occupation_map = header.occupation_map;
         let item_slot =
           bucket_ptr.cast::<(u64, V)>().add(1);
         let mut slot_index = 0;
@@ -344,9 +363,7 @@ impl <K: Hash, V> Drop for PasteboardTable<K, V> {
       fence(Ordering::Release);
       dealloc(bucket_ptr.cast(), layout);
 
-      let next_bucket =
-        (&header.next_bucket_ptr).load(Ordering::Relaxed)
-        as *mut ();
+      let next_bucket = header.next_bucket_ptr;
       if next_bucket.is_null() { break 'list_release; }
       bucket_ptr = next_bucket;
     }

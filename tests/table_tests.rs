@@ -70,11 +70,11 @@ fn inout_preservation () {
 
 #[test]
 fn concurent_insertions () { unsafe {
-  for k in 0 .. 100 {
+  for k in 0 .. 10000 {
     let table =
       PasteboardTable::<u64, u64>::init();
 
-    let start = SystemTime::now();
+    //let start = SystemTime::now();
     let threads = [
       {
         let ref_copy = addr_of!(table) as u64;
@@ -113,13 +113,14 @@ fn concurent_insertions () { unsafe {
         })
       }
     ];
+
     for thread in threads.into_iter() {
       let _ = thread.join().unwrap();
     }
 
-    println!(
-      "Writing done in {} micros",
-      start.elapsed().unwrap().as_micros());
+    // println!(
+    //   "Writing done in {} micros",
+    //   start.elapsed().unwrap().as_micros());
 
     table.freeze();
 
@@ -132,7 +133,8 @@ fn concurent_insertions () { unsafe {
     vec.sort();
     //println!("{:#?}", vec)
     for i in 0 .. 400u64 {
-      assert!(i == *vec.get(i as usize).unwrap());
+      let item = vec.get(i as usize).unwrap();
+      assert!(i == *item);
     }
   }
 } }
@@ -204,4 +206,38 @@ fn drops_correctly () {
 
   assert!(unsafe { stunt_drop_count } == Limit);
 
+}
+
+#[test]
+fn compression_benefits_assessment () {
+
+  static Limit : u64 = 5000;
+
+  let table =
+    PasteboardTable::<u64, u64>::init();
+
+  for i in 0 .. Limit {
+    table.insert(&i, i);
+  }
+
+  let start = SystemTime::now();
+  let mut ix : u64 = 8_093_057_678_145_770_544;
+  for _ in 0 .. Limit {
+    ix = ix.rotate_left(3);
+    let random_key = ix % Limit;
+    let _ = table.retrieve_ref(&random_key);
+  }
+  let time = start.elapsed().unwrap().as_millis();
+  println!("Lookup when nonfrozen took {time} ms");
+
+  table.freeze();
+
+  let start = SystemTime::now();
+  for _ in 0 .. Limit {
+    ix = ix.rotate_left(3);
+    let random_key = ix % Limit;
+    let _ = table.retrieve_ref(&random_key);
+  }
+  let time = start.elapsed().unwrap().as_millis();
+  println!("Lookup when frozen took {time} ms");
 }

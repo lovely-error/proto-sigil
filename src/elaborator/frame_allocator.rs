@@ -89,9 +89,10 @@ impl GranularSlabAllocator {
       // bitwise op ?
       fence(Ordering::SeqCst);
       let page_header_ref = unsafe {
-        &mut *(*page_ptr).cast::<AtomicU64>() };
+        &mut *(*page_ptr).cast::<AtomicU64>()
+      };
       let mut page_header_ =
-        page_header_ref.load(Ordering::Acquire);
+        page_header_ref.load(Ordering::Relaxed);
       let mut free_slab_index: u64;
       let mut page_header: PageHeaderData;
       'spininng : loop {
@@ -102,24 +103,30 @@ impl GranularSlabAllocator {
         let is_full = free_slab_index >= full_mask;
         if is_full {
           // this page is full, detach it!
+          fence(Ordering::Release);
           let _ = page_header_ref.fetch_or(1, Ordering::Relaxed);
           *page_ptr = null_mut();
           continue 'paging;
         }
-        let new = page_header_ ^ free_slab_index;
+        let new = page_header_ | free_slab_index;
         let outcome =
           page_header_ref.compare_exchange_weak(
             page_header_, new,
-            Ordering::Release, Ordering::Relaxed);
+            Ordering::Relaxed, Ordering::Relaxed);
         match outcome {
           Ok(_) => break 'paging,
           Err(actual) => {
             // someone updated the header
-            if free_slab_index & actual == 0 {
-              // but if it was caused by sombody releasing the memory
+            if (free_slab_index & actual) == 0 {
+              // but if it was caused by releasing the memory
               // then there is no conflict
-              let _ = page_header_ref.fetch_xor(
-                free_slab_index, Ordering::Relaxed); // Release ???
+              let prior = page_header_ref.fetch_or(
+                free_slab_index, Ordering::Relaxed);
+              if (prior & free_slab_index) != 0 {
+                // someone already has this mem, rerun
+                page_header_ = actual;
+                continue 'spininng;
+              };
               break 'paging;
             };
             page_header_ = actual;
@@ -128,6 +135,7 @@ impl GranularSlabAllocator {
         }
       }
     }
+    fence(Ordering::Release);
     control_item =
       MemorySlabControlItem::init(
         (*page_ptr).cast(), offset as u8, slab_size);
