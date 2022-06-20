@@ -1,6 +1,6 @@
 use std::{
   time::{SystemTime,}, collections::HashMap,
-  thread::{spawn}, ptr::addr_of};
+  thread::{spawn}, ptr::addr_of, sync::Mutex};
 
 use proto_sigil::elaborator::environment::PasteboardTable;
 
@@ -117,7 +117,6 @@ fn concurent_insertions () { unsafe {
     for thread in threads.into_iter() {
       let _ = thread.join().unwrap();
     }
-
     // println!(
     //   "Writing done in {} micros",
     //   start.elapsed().unwrap().as_micros());
@@ -138,6 +137,72 @@ fn concurent_insertions () { unsafe {
     }
   }
 } }
+
+//#[test]
+fn mutexed_hashmap_assessment () {
+  let map = HashMap::<u64, u64>::new();
+  let map = Mutex::new(map);
+
+  let start = SystemTime::now();
+  let threads = [
+    {
+      let ref_copy = addr_of!(map) as u64;
+      spawn(move ||{
+        for i in 0 .. 100u64 {
+          unsafe {
+            let mut map =
+              (*(ref_copy as *mut Mutex<HashMap<u64, u64>>)) .lock().unwrap();
+            map.insert(i, i);
+          };
+        }
+      })
+    },
+    {
+      let ref_copy = addr_of!(map) as u64;
+      spawn(move ||{
+        for i in 0 .. 100u64 {
+          unsafe {
+            let mut map =
+              (*(ref_copy as *mut Mutex<HashMap<u64, u64>>)) .lock().unwrap();
+            map.insert(i, i);
+          };
+        }
+      })
+    },
+    {
+      let ref_copy = addr_of!(map) as u64;
+      spawn(move ||{
+        for i in 0 .. 100u64 {
+          unsafe {
+            let mut map =
+              (*(ref_copy as *mut Mutex<HashMap<u64, u64>>)) .lock().unwrap();
+            map.insert(i, i);
+          };
+        }
+      })
+    },
+    {
+      let ref_copy = addr_of!(map) as u64;
+      spawn(move ||{
+        for i in 0 .. 100u64 {
+          unsafe {
+            let mut map =
+              (*(ref_copy as *mut Mutex<HashMap<u64, u64>>)) .lock().unwrap();
+            map.insert(i, i);
+          };
+        }
+      })
+    },
+  ];
+
+  for thread in threads.into_iter() {
+    let _ = thread.join().unwrap();
+  }
+  println!(
+      "Writing done in {} micros",
+      start.elapsed().unwrap().as_micros());
+
+}
 
 #[test]
 fn random_access_performance () {
@@ -208,7 +273,7 @@ fn drops_correctly () {
 
 }
 
-#[test]
+//#[test]
 fn compression_benefits_assessment () {
 
   static Limit : u64 = 5000;

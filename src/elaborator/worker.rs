@@ -296,40 +296,7 @@ fn elab_worker_task_loop
             let mut dependent_task = *task;
             dependent_task.inject_action_chain(continuation);
             spawned_subtasks.append(dependent_task);
-            // patch the hole !
-            if limit == 1 {
-              let len = spawned_subtasks.count_items() as usize;
-              if len > 0 && len <= TASK_CACHE_SIZE {
-                // can reload cache without going through queue
-                limit = len as u16; index = 0;
-                for i in 0 .. len {
-                  let item = spawned_subtasks.pop().unwrap();
-                  unsafe {
-                    task_cache.as_mut_ptr().add(i)
-                    .cast::<Task>().write(item);
-                  }
-                }
-                continue 'that;
-              }
-              // nothing to patch. this quantum has complete.
-              // sched subtasks & get new batch
-              continue 'main;
-            }
-            if index == limit { // already at the end. just decrement end index
-              limit -= 1;
-            } else { // can pull item from end to current spot
-              limit -= 1;
-              unsafe {
-                let patch =
-                  task_cache
-                  .as_ptr()
-                  .add(limit as usize)
-                  .read()
-                  .assume_init();
-                *task = patch;
-              };
-              continue 'immidiate;
-            }
+
           },
           LinkKind::Completion => {
             // task is done
@@ -339,46 +306,15 @@ fn elab_worker_task_loop
                 task.project_data_frame_ptr());
             }
 
-            if limit == 1 { // nothing to patch. sched subtasks & get new batch
-              let len = spawned_subtasks.count_items() as usize;
-              if len > 0 && len <= TASK_CACHE_SIZE {
-                // can reload cache without going through queue
-                limit = len as u16; index = 0;
-                for i in 0 .. len {
-                  let item = spawned_subtasks.pop().unwrap();
-                  unsafe {
-                    task_cache.as_mut_ptr().add(i)
-                    .cast::<Task>().write(item);
-                  }
-                }
-                continue 'that;
-              }
-              continue 'main;
-            }
-            if index == limit { // already at the end. just decrement end index
-              limit -= 1;
-            } else { // can pull item from end to current spot
-              limit -= 1;
-              unsafe {
-                let patch =
-                  task_cache
-                  .as_ptr()
-                  .add(limit as usize)
-                  .read()
-                  .assume_init();
-                *task = patch;
-              };
-              continue 'immidiate;
-            }
           },
           LinkKind::ProgressCheck => {
             // some dependent task want to check in
             // to see if all of its blockers were resolved
             let checker =
               action.project_progress_checker();
-            let df_ptr =
+            let frame_ptr =
               TaskFrameHandle(task.project_data_frame_ptr());
-            let smth = checker(df_ptr);
+            let smth = checker(frame_ptr);
             if let Some(patch) = smth {
               // it can, indeed, continue
               task.inject_action_chain(patch);
@@ -386,47 +322,30 @@ fn elab_worker_task_loop
             } else {
               // put it in the wait corner
               pending_tasks.append(*task);
-
-              if limit == 1 { // nothing to patch. sched subtasks & get new batch
-                let len = spawned_subtasks.count_items() as usize;
-                if len > 0 && len <= TASK_CACHE_SIZE {
-                  // can reload cache without going through queue
-                  limit = len as u16; index = 0;
-                  for i in 0 .. len {
-                    let item = spawned_subtasks.pop().unwrap();
-                    unsafe {
-                      task_cache.as_mut_ptr().add(i)
-                      .cast::<Task>().write(item);
-                    }
-                  }
-                  continue 'that;
-                }
-                continue 'main;
-              }
-              if index == limit { // already at the end. just decrement end index
-                limit -= 1;
-              } else { // can pull item from end to current spot
-                limit -= 1;
-                unsafe {
-                  let patch =
-                    task_cache
-                    .as_ptr()
-                    .add(limit as usize)
-                    .read()
-                    .assume_init();
-                  *task = patch;
-                };
-                continue 'immidiate;
-              }
             }
           },
           LinkKind::Callback => todo!(),
         }
         break 'immidiate;
       }
-      if limit == 0 { continue 'main; }
       index += 1;
-      if index == limit { index = 0 }
+      if index == limit {
+        let len = spawned_subtasks.count_items() as usize;
+        if len > 0 && len <= TASK_CACHE_SIZE {
+          // can reload cache without going through queue
+          limit = len as u16; index = 0;
+          for i in 0 .. len {
+            let item = spawned_subtasks.pop().unwrap();
+            unsafe {
+              task_cache.as_mut_ptr().add(i)
+              .cast::<Task>().write(item);
+            }
+          }
+          continue 'that;
+        } else {
+          continue 'main;
+        }
+      }
     };
   };
 

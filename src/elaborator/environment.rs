@@ -233,6 +233,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           fence(Ordering::Acquire); // no spec here
           if next.is_null() { // need more storage
             Self::handle_storage_shortage(bucket_ptr);
+            //fence(Ordering::Release);
           } else {
             bucket_ptr = next;
           }
@@ -247,7 +248,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           }
         } else { break }
       }
-
+      //fence(Ordering::SeqCst);
       let updated_occupation_map = occupation_map | index;
       let update_outcome =
       header.occupation_map.compare_exchange_weak(
