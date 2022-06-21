@@ -5,7 +5,7 @@ use std::mem::{MaybeUninit, size_of, align_of, forget, needs_drop};
 use std::alloc::{alloc, Layout, dealloc};
 use std::ptr::{drop_in_place,};
 
-use crate::elaborator::worker::LoopData;
+use crate::elaborator::worker::LoopQueue;
 
 
 #[derive(Debug)]
@@ -194,7 +194,7 @@ impl <const n : usize, T> InlineVector<n, T> where T: Clone {
 impl <const n : usize, T> InlineVector<n, T> where T:Copy {
   // not too fancy impl, tbh.
   // but making it perform faster is harder
-  pub fn copy_quickly_into(&self, target: &mut LoopData<T>) { unsafe {
+  pub fn copy_quickly_into(&self, target: &mut LoopQueue<T>) { unsafe {
     if self.is_empty() { return; }
     let end_index = self.count_items() as usize;
     let dst_capacity =

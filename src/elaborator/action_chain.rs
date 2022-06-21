@@ -1,5 +1,5 @@
 
-use std::{intrinsics::transmute, mem::size_of};
+use std::{intrinsics::transmute, mem::{size_of, forget}, ptr::addr_of};
 
 use crate::support_structures::mini_vector::SomeInlineVector;
 
@@ -8,7 +8,9 @@ use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 // Task interface
 // enum ActionChain {
 
-//   // just single step of computation
+//   Gateway(Box<dyn FnOnce() -> Self>)
+
+//   // a single step of computation
 //   Step(fn (TaskFrameHandle) -> Self),
 
 //   // used to spawn subtasks
@@ -29,7 +31,7 @@ use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum LinkKind {
   Step, Fanout, Completion, Callback, FrameRequest,
-  ProgressCheck
+  ProgressCheck, Gateway
 }
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum DataFrameSize {
@@ -82,7 +84,16 @@ impl TaskFrameHandle {
 #[derive(Clone, Copy, Debug)]
 pub struct ActionPtr(u64);
 impl ActionPtr {
-  pub fn init(
+  pub fn make_gateway(
+    closure: Box<dyn FnOnce(TaskFrameHandle) -> Self + Send>
+  ) -> Self { unsafe {
+    let mut gateway_ptr = addr_of!(closure) as u64;
+    gateway_ptr = (gateway_ptr << 4) + LinkKind::Gateway as u64;
+    forget(closure);
+    let link = transmute::<_, ActionPtr>(gateway_ptr);
+    return link;
+  } }
+  pub fn make_frame_request(
     frame_size: DataFrameSize,
     action_chain_head: ActionPtr
   ) -> Self {
@@ -91,6 +102,16 @@ impl ActionPtr {
       + LinkKind::FrameRequest as u64;
     return Self(number);
   }
+  pub fn project_gateway(&self)
+  -> Box<dyn FnOnce(TaskFrameHandle) -> Self + Send> { unsafe {
+    let ptr = self.0 >> 4;
+    let gw =
+      transmute::<
+        _,
+        *const Box<dyn FnOnce(TaskFrameHandle) -> Self + Send>>
+      (ptr);
+    return gw.read();
+  } }
   pub fn project_link(&self) -> ActionPtr {
     ActionPtr(self.0 >> 8)
   }

@@ -13,11 +13,11 @@ macro_rules! task_unfolding_loop {
 
     task_unfolding_loop! { $($tail)* }
   };
-  ($(go $expr:expr ;)* $($tail:tt)*) => {
+  (go $expr:expr ; $($tail:tt)*) => {
     // da heck?!!
-    //task_unfolding_loop! { $($tail)* }
+    task_unfolding_loop! { $($tail)* }
   };
-  ($($stmt:stmt ;)* $($tail:tt)*) => {
+  ($stmt:stmt ; $($tail:tt)*) => {
 
     task_unfolding_loop! { $($tail)* }
   };

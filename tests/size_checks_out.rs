@@ -3,7 +3,7 @@ use std::{mem::size_of};
 
 use proto_sigil::{trees::raw_syntax_nodes::{
   AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr},
-  parser::parser::symbol::Symbol, elaborator::{worker::LoopQueue,
+  parser::parser::symbol::Symbol, elaborator::{worker::WorkQueue,
     action_chain::Task}, support_structures::mini_vector::InlineVector};
 
 #[test]
@@ -38,7 +38,7 @@ fn size_of_imp_ctx_item () {
 
 #[test]
 fn loop_size () {
-  println!("{}", size_of::<LoopQueue<()>>())
+  println!("{}", size_of::<WorkQueue<()>>())
 }
 
 #[test]

@@ -50,7 +50,7 @@ fn main () {
   let init =
     ActionPtr::make_link(LinkKind::Step, begin);
   let work_graph =
-    ActionPtr::init(
+    ActionPtr::make_frame_request(
       DataFrameSize::Bytes120, init);
 
   let start = SystemTime::now();

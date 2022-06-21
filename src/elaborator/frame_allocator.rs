@@ -147,8 +147,9 @@ impl GranularSlabAllocator {
     let index = 1 << control_item.project_index();
     let ptr = control_item.project_base_ptr();
     let header = &mut *ptr.cast::<AtomicU64>();
-    let previous = header.fetch_xor(index, Ordering::Relaxed);
-    let xored = previous ^ index;
+    let previous = header.fetch_and(
+      !index, Ordering::Relaxed);
+    let xored = previous & !index;
     if xored == transmute(ORPHAN_PAGE) { // hell, yeah! free page
       *ptr.cast::<*mut ()>() = self.free_page_list;
       self.free_page_list = ptr;

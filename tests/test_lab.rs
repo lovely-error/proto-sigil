@@ -87,7 +87,7 @@ fn must_work () {
   let init =
     ActionPtr::make_link(LinkKind::Step, begin);
   let work_graph =
-    ActionPtr::init(
+    ActionPtr::make_frame_request(
       DataFrameSize::Bytes120, init);
 
   // let start = SystemTime::now();
@@ -147,7 +147,7 @@ fn children_see_parrents() {
   fn spawn(_ : TaskFrameHandle, mut tg : TaskGroupHandle) -> ActionPtr {
     let p = ActionPtr::make_link(
       LinkKind::Step, step2);
-    let p = ActionPtr::init(
+    let p = ActionPtr::make_frame_request(
         DataFrameSize::Bytes56, p);
     tg.assign_work(p);
     return ActionPtr::make_progress_checker(checker);
@@ -162,7 +162,7 @@ fn children_see_parrents() {
 
   let ptr =
     ActionPtr::make_link(LinkKind::Step, step1);
-  let ptr = ActionPtr::init(
+  let ptr = ActionPtr::make_frame_request(
     DataFrameSize::Bytes56, ptr);
 
   // let start = SystemTime::now();
@@ -199,3 +199,57 @@ fn simd () {
   // use std::simd;
 
 }
+
+#[test]
+fn gateway_is_ok () {
+  // struct Ctx { str: String }
+  // fn some_func(str: String) -> ActionPtr {
+  //   let gw =
+  //   Box::<dyn FnOnce(TaskFrameHandle) -> ActionPtr>::new(|tf|{
+  //     let frame = tf.interpret_frame::<Ctx>();
+  //     addr_of_mut!(frame.str).write(str);
+  //     return ActionPtr::make_link(LinkKind::Step, read);
+  //   });
+  //   fn read(tf : TaskFrameHandle) -> ActionPtr {
+  //     let frame = tf.interpret_frame::<Ctx>();
+  //     println!("{}", frame.str);
+  //     return ActionPtr::make_completion(true);
+  //   }
+  //   let cont = ActionPtr::make_gateway(gw);
+  //   let framed = ActionPtr::make_frame_request(
+  //     DataFrameSize::Bytes56, cont);
+  //   return framed;
+  // }
+}
+
+
+// macro_rules! apply {
+//   ($($tokens:tt)*) => {
+//     mk_tuple! { halve! { double! { $($tokens)* } } }
+//   };
+// }
+// macro_rules! double {
+//   (S $($tail:tt)*) => {
+//     S S double! { $($tail)* }
+//   };
+//   (Z) => { Z };
+//   ($($tokens:tt)*) => { $($tokens)* };
+// }
+// macro_rules! halve {
+//   (S S $($tail:tt)*) => {
+//     S halve! { $($tail)* }
+//   };
+//   (Z) => { Z };
+//   ($($tokens:tt)*) => { $($tokens)* };
+// }
+// macro_rules! mk_tuple {
+//   (S $($tail:tt)*) => {
+//     ((), mk_tuple! { $($tail)* } )
+//   };
+//   (Z) => { () };
+//   ($($tokens:tt)*) => { $($tokens)* };
+// }
+
+// fn tupleception () {
+//   let _ = apply! { S S S Z } ;
+// }

@@ -1,9 +1,9 @@
-use proto_sigil::elaborator::worker::LoopData;
+use proto_sigil::elaborator::worker::LoopQueue;
 
 
 #[test]
 fn inout_preserve () {
-  let mut lq = LoopData::<u64>::init_new();
+  let mut lq = LoopQueue::<u64>::init_new();
   //println!("{:#?}", lq);
   for n in 0 .. 4096 {
     lq.enqueue_item(n);
@@ -15,7 +15,7 @@ fn inout_preserve () {
 }
 #[test]
 fn alloc_at_expected_points () {
-  let mut lq = LoopData::<u64>::init_new();
+  let mut lq = LoopQueue::<u64>::init_new();
   //println!("{:#?}", lq);
   for n in 0 .. 510 {
     lq.enqueue_item(n);
@@ -28,7 +28,7 @@ fn alloc_at_expected_points () {
 
 #[test]
 fn consume_little_memory () {
-  let mut lq = LoopData::<u64>::init_new();
+  let mut lq = LoopQueue::<u64>::init_new();
   for i in 0 .. 1_000_000 {
     lq.enqueue_item(i);
     let n = lq.dequeue_item().unwrap();

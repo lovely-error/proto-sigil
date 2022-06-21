@@ -282,11 +282,12 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     .write((hash, value));
 
   } }
-  // ATC is (n / 63 - k)
+  // ATC is (n / (63 - m) - k) where m in [0;10]
   // Sensitive to the how far from head item being retrieved is located.
   // The farther it is, the worse performance this operation has.
   // On average, this is not too bad for realistic amounts.
-  // For 5000 items, retrieve time for randomly selected keys is 6 ms.
+  // For 5000 items, retrieve time for randomly selected keys is 6 ms
+  // and 5 ms if table is compressed
   //
   // If rust had 16 byte atomics the complexity could be lowered
   // to O(n / 95 - k) and retrieve time would be 50% better.

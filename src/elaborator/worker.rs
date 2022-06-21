@@ -2,12 +2,12 @@
 use std::{
   thread::{JoinHandle, spawn, park, yield_now},
   sync::{
-    Mutex, atomic::{AtomicBool, Ordering, AtomicU16, AtomicU64}},
+    Mutex, atomic::{AtomicBool, Ordering, AtomicU16, fence}},
     mem::{MaybeUninit, size_of},
     ptr::addr_of_mut, intrinsics::{transmute},
     alloc::{Layout, alloc}};
 use crate::{elaborator::{
-  frame_allocator::{GranularSlabAllocator, SlabSize, PageHeaderData},
+  frame_allocator::{GranularSlabAllocator, SlabSize,},
   action_chain::{DataFrameSize, TaskFrameHandle}},
   support_structures::mini_vector::InlineVector};
 
@@ -16,7 +16,7 @@ use super::{
   frame_allocator::MemorySlabControlItem};
 
 #[derive(Debug)]
-pub struct LoopData<T> {
+pub struct LoopQueue<T> {
   pub read_page: *mut T,
   pub write_page: *mut T,
   pub newest_page: *mut T,
@@ -25,7 +25,7 @@ pub struct LoopData<T> {
   //#[cfg(test)]
   //pub number_of_allocated_pages: usize,
 }
-impl<T> LoopData<T> {
+impl<T> LoopQueue<T> {
   pub fn is_empty(&self) -> bool {
     self.read_page == self.write_page &&
     self.read_ptr == self.write_ptr
@@ -92,14 +92,14 @@ impl<T> LoopData<T> {
 // mutex is used because rust doesnt have 16 byte atomics
 // in stable, but this is fine, cus I either way not sure
 // if this amount of state can be synced atomically
-pub struct LoopQueue<T>(Mutex<LoopData<T>>);
-impl <T> LoopQueue<T> {
+pub struct WorkQueue<T>(Mutex<LoopQueue<T>>);
+impl <T> WorkQueue<T> {
   pub fn init_new () -> Self {
-    Self(Mutex::new(LoopData::init_new()))
+    Self(Mutex::new(LoopQueue::init_new()))
   }
   pub fn with_acquired_queue<K>(
     &mut self,
-    action: impl FnOnce(&mut LoopData<T>) -> K
+    action: impl FnOnce(&mut LoopQueue<T>) -> K
   ) -> K {
     let mut mutex = self.0.lock().unwrap();
     let smth = action(&mut mutex);
@@ -107,25 +107,22 @@ impl <T> LoopQueue<T> {
     return smth;
   }
 }
-unsafe impl <T> Send for LoopQueue<T> {}
+unsafe impl <T> Send for WorkQueue<T> {}
 
 pub struct WorkGroup {
-  threads: Vec<JoinHandle<()>>,
-  task_queue: LoopQueue<Task>,
+  executors: Vec<JoinHandle<()>>,
+  task_queue: WorkQueue<Task>,
   was_signaled_to_stop: AtomicBool,
   liveness_count: AtomicU16,
 }
 
 
-
-
 enum RetirementChoise { Suspend, Terminate, Continue }
 
-// todo: make copying in batches. dont use drain
 fn elab_worker_task_loop
   <const TASK_CACHE_SIZE : usize>(
   stop_flag_ref: &AtomicBool,
-  queue_ref: &mut LoopQueue<Task>,
+  queue_ref: &mut WorkQueue<Task>,
   threads: *mut Vec<JoinHandle<()>>,
   liveness_count: &AtomicU16,
 ) {
@@ -144,7 +141,7 @@ fn elab_worker_task_loop
   'main : loop {
     if stop_flag_ref.load(Ordering::Relaxed) { break 'main; };
     // take a couple of tasks to this thread's storage
-    // to not put much pressure on mutex by frequent retriewing
+    // to not put much pressure on mutex by frequent retrieving
     // of items from work queue. It might appear
     // because majority of tasks are expected to be quiete cheap to execute
     let mut should_ping_threads : bool = false;
@@ -324,6 +321,15 @@ fn elab_worker_task_loop
               pending_tasks.append(*task);
             }
           },
+          LinkKind::Gateway => {
+            let gw =
+              action.project_gateway();
+            let frame_handle =
+              TaskFrameHandle(task.project_data_frame_ptr());
+            let next = gw(frame_handle);
+            task.inject_action_chain(next);
+            continue 'immidiate;
+          },
           LinkKind::Callback => todo!(),
         }
         break 'immidiate;
@@ -332,7 +338,7 @@ fn elab_worker_task_loop
       if index == limit {
         let len = spawned_subtasks.count_items() as usize;
         if len > 0 && len <= TASK_CACHE_SIZE {
-          // can reload cache without going through queue
+          // can refill cache without going through queue
           limit = len as u16; index = 0;
           for i in 0 .. len {
             let item = spawned_subtasks.pop().unwrap();
@@ -363,7 +369,7 @@ impl WorkGroupRef {
     let q_ptr = addr_of_mut!(data.task_queue);
     let mut threads = Vec::<JoinHandle<()>>::new();
     threads.reserve(thread_count as usize);
-    q_ptr.write(LoopQueue::init_new());
+    q_ptr.write(WorkQueue::init_new());
     let initial_task = Task::init(
       MemorySlabControlItem::init_null(),
       work_graph);
@@ -372,10 +378,11 @@ impl WorkGroupRef {
     });
     // maybe it is reasonable to start threads with little relative
     // time difference rather then all at once?
+    fence(Ordering::Release);
     for _ in 0 .. thread_count {
       let queue_ref = &mut *q_ptr ;
       let stop_flag_ref = &data.was_signaled_to_stop;
-      let threads_ptr = addr_of_mut!(data.threads) as usize;
+      let threads_ptr = addr_of_mut!(data.executors) as usize;
       let lc = &data.liveness_count;
       let thread = spawn(move || {
         elab_worker_task_loop::<4>(
@@ -384,12 +391,12 @@ impl WorkGroupRef {
       });
       threads.push(thread);
     }
-    addr_of_mut!(data.threads).write(threads);
+    addr_of_mut!(data.executors).write(threads);
     return WorkGroupRef(transmute(wg));
   } }
   pub fn await_completion(self) {
     yield_now(); // most likely a good descision
-    for thread in self.0.threads {
+    for thread in self.0.executors {
       let _ = thread.join().unwrap();
     }
   }
