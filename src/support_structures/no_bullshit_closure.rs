@@ -4,57 +4,54 @@ use std::{
   alloc::{alloc, Layout, dealloc}, marker::PhantomData,
   intrinsics::{transmute,},};
 
-use crate::parser::node_allocator::EntangledPtr;
-
-
-pub trait SupportTypeErasure<Erased> {
-  fn erase_type(self) -> Erased;
-}
-
 
 #[repr(align(16))]
-struct NoDctorClos {
-  env: *mut (),
-  inv: *mut (),
-}
+pub struct Closure<Env, I, O>(u64,u64, PhantomData<(Env, I, O)>);
 
-#[repr(align(16))]
-pub struct Closure<Env, I, O> {
-  env: *mut (),
-  inv: EntangledPtr,
-  dctor: EntangledPtr,
-
-  _own1: PhantomData<I>,
-  _own2: PhantomData<O>,
-  _own3: PhantomData<Env>
+impl <X, Y, I> Closure<X, Y, I> {
+  fn project_env_ptr(&self) -> *mut () {
+    (self.0 >> 1) as *mut ()
+  }
+  fn project_action_ptr(&self) -> *mut () {
+    (self.1 & ((1 << 40) - 1)) as *mut ()
+  }
+  fn project_destructor_ptr(&self) -> *mut () {
+    let base = (self.1 & ((1 << 40) - 1)) as isize;
+    let offset = (self.1 >> 40) as isize;
+    let dctor_ptr = (base + offset) as usize;
+    return dctor_ptr as *mut ();
+  }
+  fn was_invoked(&self) -> bool {
+    (self.0 & 1) == 1
+  }
+  fn dont_have_env(&self) -> bool {
+    self.project_env_ptr().is_null()
+  }
+  fn mark_as_invoked(&mut self) {
+    self.0 += 1;
+  }
 }
 
 impl <X, Y, I> Closure<X, Y, I> {
-  fn dctor(env: *mut ()) { unsafe {
-    if env != null_mut() {
-      // need to track if calling happened
-      // drop_in_place(env.cast::<X>());
-      dealloc(
-        env.cast::<u8>(),
-        Layout::from_size_align_unchecked(
-          size_of::<X>(), align_of::<X>()))
+  fn dctor(env: *mut (), need_env_drop: bool) { unsafe {
+    if need_env_drop {
+      drop_in_place(env.cast::<X>());
     }
+    dealloc(
+      env.cast::<u8>(),
+      Layout::from_size_align_unchecked(
+        size_of::<X>(), align_of::<X>()))
   } }
   pub fn init_with_given_mem(
     mem: *mut (), env: X, fun: fn (*mut X, Y) -> I
   ) -> Self { unsafe {
     mem.cast::<X>().write(env);
-    let fun =
-      EntangledPtr::from_ptr_pair(mem, fun as *mut ())
-      .unwrap();
-    let dctor =
-      EntangledPtr::from_ptr_pair(
-        mem, Self::dctor as *mut ())
-      .unwrap();
-    return Self {
-      env: mem, inv: fun, dctor,
-      _own1: PhantomData, _own2: PhantomData, _own3: PhantomData
-    }
+    let fun_ = fun as *mut u8;
+    let dctor = Self::dctor as *mut u8;
+    let ptr_diff = dctor.offset_from(fun_);
+    let mem = (mem as u64) << 1;
+    let procs = (fun as u64) + (ptr_diff) as u64;
+    return Self(mem, procs, PhantomData)
   } }
   pub fn init_with_global_mem(
     env: X, fun: fn (*mut X, Y) -> I
@@ -63,39 +60,30 @@ impl <X, Y, I> Closure<X, Y, I> {
       let mem = alloc(Layout::from_size_align_unchecked(
         size_of::<X>(), align_of::<X>()));
       mem.cast::<X>().write(env);
-      let fun =
-        EntangledPtr::from_ptr_pair(
-          mem.cast(), fun as *mut ())
-        .unwrap();
-      let dctor =
-        EntangledPtr::from_ptr_pair(
-          mem.cast(), Self::dctor as *mut ())
-        .unwrap();
-      return Self {
-        env: mem.cast(), inv: fun, dctor,
-        _own1: PhantomData, _own2: PhantomData, _own3: PhantomData
-      };
+      let fun_ = fun as *mut u8;
+      let dctor = Self::dctor as *mut u8;
+      let ptr_diff = dctor.offset_from(fun_);
+      let ptr_diff = (ptr_diff << 40) as u64;
+      let mem = (mem as u64) << 1;
+      let procs = (fun as u64) + ptr_diff;
+      return Self(mem, procs, PhantomData)
     } else {
-      let triv_clos =
-        NoDctorClos { env: null_mut(), inv: fun as *mut () };
-      return transmute(triv_clos)
+      return Self(0, fun as u64, PhantomData)
     };
   }; }
-  pub fn invoke_dispose(self, args: Y) -> I { unsafe {
-    if self.env == null_mut() { // trivial closure
-      let triv_clos =
-        transmute::<_, NoDctorClos>(self);
-      let fun =
-        transmute::<_, fn (u64, Y) -> I>(triv_clos.inv);
-      let res = fun (0, args);
+  pub fn invoke_consume(self, args: Y) -> I { unsafe {
+    let action_ptr = self.project_action_ptr();
+    let fun =
+      transmute::<_, fn (*mut X, Y) -> I>(action_ptr);
+    if self.dont_have_env() { // trivial closure
+      let res = (fun)(null_mut(), args);
       return res;
     } else {
-      let stan_clos = self;
-      let fun =
-        stan_clos.inv.reach_referent_from(stan_clos.env)
-        .cast::<fn (*mut X, Y) -> I>();
-      let res = (*fun)(&mut *stan_clos.env.cast::<X>(), args);
-      drop(stan_clos);
+      let mut self_ = self;
+      let env_ptr = self_.project_env_ptr();
+      let res = (fun)(env_ptr.cast::<X>(), args);
+      self_.mark_as_invoked(); // it is already dropped
+      drop(self_);
       return res;
     }
   } }
@@ -103,80 +91,32 @@ impl <X, Y, I> Closure<X, Y, I> {
 
 impl <X, Y, I> Drop for Closure<X, Y, I> {
   fn drop(&mut self) { unsafe {
-    if self.env != null_mut() {
-      let dctor_ptr =
-        self.dctor.reach_referent_from(self.env);
-      let dctor = transmute::<_, fn (*mut ())>(dctor_ptr);
-      dctor (self.env);
-    }
+    if self.dont_have_env() { return; }
+    let dctor_ptr = self.project_destructor_ptr();
+    let dctor =
+      transmute::<_, fn (*mut (), bool)>(dctor_ptr);
+    let env_ptr = self.project_env_ptr();
+    let need_drop = self.was_invoked();
+    (dctor)(env_ptr, need_drop);
   } }
 }
 
-#[repr(align(16))]
-pub struct SomeClosure<I, O> {
-  env: *mut (),
-  inv: EntangledPtr,
-  dctor: EntangledPtr,
-
-  _own1: PhantomData<I>,
-  _own2: PhantomData<O>,
-}
-
-#[repr(align(16))]
-pub struct SomeTrivialClosure<I, O> {
-  env: *mut (),
-  inv: *mut (),
-
-  _own1: PhantomData<I>,
-  _own2: PhantomData<O>,
-}
-
-impl <I, O> SomeClosure<I, O> {
-  pub fn invoke_consume(self, args: I) -> O { unsafe {
-    if self.env == null_mut() {
-      let triv_clos =
-        transmute::<_, SomeTrivialClosure<I, O>>(self);
-      let fun =
-        transmute::<_, fn (*mut (), I) -> O>(triv_clos.inv);
-      let res = fun (null_mut(), args);
-      return res;
-    } else {
-      let fun_ptr = self.inv.reach_referent_from(self.env);
-      let fun =
-        transmute::<_, fn (*mut (), I) -> O>(fun_ptr);
-      let res = fun (self.env, args);
-      drop(self);
-      return res;
-    }
-  } }
-}
-
-impl <I, O> Drop for SomeClosure<I, O> {
-  fn drop(&mut self) { unsafe {
-    if self.env != null_mut() {
-      let ptr = self.dctor.reach_referent_from(self.env);
-      let dctor = transmute::<_, fn (*mut ())>(ptr);
-      dctor (self.env);
-    }
-  } }
-}
 
 impl <X, Y, I> Clone for Closure<X, Y, I> where X:Clone {
   fn clone(&self) -> Self { unsafe {
-    if self.env == null_mut() { // just copy bytes
+    if self.dont_have_env() { // just copy bytes
       let copy =
         transmute::<_, *const Self>(self).read();
       return copy;
-    } else { // need memcopy env
+    } else { // need to clone env
       let new_env_mem =
         alloc(Layout::from_size_align_unchecked(
           size_of::<X>(), align_of::<X>()));
-      let copy = (&*self.env.cast::<X>()).clone();
+      let env_ptr = self.project_env_ptr();
+      let copy = (&*env_ptr.cast::<X>()).clone();
       new_env_mem.cast::<X>().write(copy);
-      return Self {
-        dctor: self.dctor, env: new_env_mem.cast(), inv: self.inv,
-        _own1: PhantomData, _own2: PhantomData, _own3: PhantomData
-      };
+      let mem = (new_env_mem as u64) << 1;
+      return Self(mem , self.1, PhantomData)
     }
   } }
 }
@@ -184,42 +124,84 @@ impl <X, Y, I> Clone for Closure<X, Y, I> where X:Clone {
 unsafe impl <X, Y, I> Send for Closure<X, Y, I> where X:Send {}
 unsafe impl <X, Y, I> Sync for Closure<X, Y, I> where X:Sync {}
 
+struct CommonClosureRepr(u64,u64);
+impl CommonClosureRepr {
+  fn project_env_ptr(&self) -> *mut () {
+    (self.0 >> 1) as *mut ()
+  }
+  fn project_action_ptr(&self) -> *mut () {
+    (self.1 & ((1 << 40) - 1)) as *mut ()
+  }
+  fn project_destructor_ptr(&self) -> *mut () {
+    let base = (self.1 & ((1 << 40) - 1)) as isize;
+    let offset = (self.1 >> 40) as isize;
+    let dctor_ptr = (base + offset) as usize;
+    return dctor_ptr as *mut ();
+  }
+  fn was_invoked(&self) -> bool {
+    (self.0 & 1) == 1
+  }
+  fn dont_have_env(&self) -> bool {
+    self.project_env_ptr().is_null()
+  }
+  fn mark_as_invoked(&mut self) {
+    self.0 += 1;
+  }
+}
 
-impl <X, Y, I> SupportTypeErasure<SomeClosure<Y, I>> for Closure<X, Y, I> {
-  fn erase_type(self) -> SomeClosure<Y, I> {
+pub struct SomeClosure<I, O>(u64, u64, PhantomData<(I, O)>);
+
+impl <I, O> SomeClosure<I, O> {
+  pub fn try_invoke(&mut self, args: I) -> Option<O> { unsafe {
+    let shrep =
+      transmute::<_, &mut CommonClosureRepr>(&mut *self);
+    let no_env = shrep.dont_have_env();
+    if !no_env && shrep.was_invoked() { // this clos is one-shot
+      return None;
+    }
+    let action_ptr = shrep.project_action_ptr();
+    let fun =
+      transmute::<_, fn (*mut (), I) -> O>(action_ptr);
+    if no_env { // trivial closure
+      let res = (fun)(null_mut(), args);
+      return Some(res);
+    } else {
+      let env_ptr = shrep.project_env_ptr();
+      let res = (fun)(env_ptr, args);
+      shrep.mark_as_invoked();
+      return Some(res);
+    }
+  }; }
+}
+
+impl <X, Y, I> Closure<X, Y, I> {
+  pub fn erase_env_type(self) -> SomeClosure<Y, I> {
     unsafe { transmute(self) }
   }
 }
 
-
 #[macro_export]
 macro_rules! closure {
-  ( [ $($capt_name:ident),* ]
+  ( [ $($capt_name:ident $(= $expr:expr)?),* ]
     $(| $( $arg_name:ident $(: $ty:ty)? ),* |)?
     $(-> $rt:ty)? $bl:block )
   => {
     {
-      let env = ($($capt_name),*);
-      // fn name_env_type<X, Y, I>() -> fn (*mut X, Y) -> I {
-      //   | env : *mut X , Y | -> I {
-      //     let ($($capt_name ),*) = unsafe { env.cast::<X>().read() };
-      //     $bl
-      //   }
-      // }
+      let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
       let clos = Closure::init_with_global_mem(
-        env, | env , ( $($($arg_name),*)? )
-          // : mk_ty! { $($arg_name $(: $ty)? ,)* }
+        env, | env , build_arg_destructor_tuple! { $($($arg_name ,)*)? }
+          : mk_ty_rec! { $($($arg_name $(: $ty)? ,)*)? }
         |
         $(-> $rt)? {
-          //name_env_type()(env, ( $($arg_name),* ))
-          let ($($capt_name ),*) = unsafe { env.read() };
+          let build_destructor_tuple! { $($capt_name $(= $expr)? ,)* }
+            = unsafe { env.read() };
           $bl
         });
-      let some_clos = clos.erase_type();
-      some_clos
+      clos
     }
   };
 }
+#[macro_export]
 macro_rules! mk_ty_rec {
   ($_:ident : $ty:ty , $($tail:tt)*) => {
     ( $ty , mk_ty_rec! { $($tail)* } )
@@ -229,7 +211,7 @@ macro_rules! mk_ty_rec {
   };
   () => { () };
 }
-macro_rules! flatten_tuple {
+macro_rules! flatten_type_list {
   ( ( $ty1:ty , ( $ty2:ty , $ty3:ty ) ) ) => {
     ( $ty1 , $ty2 , flatten_tuple! ( $ty3 ) )
   };
@@ -238,14 +220,42 @@ macro_rules! flatten_tuple {
 }
 macro_rules! mk_ty {
   ($($tokens:tt)*) => {
-    flatten_tuple! { mk_ty_rec! { $($tokens)* } }
+    flatten_type_list! { mk_ty_rec! { $($tokens)* } }
+  };
+  () => { () };
+}
+#[macro_export]
+macro_rules! build_capture_tuple {
+  ($_:ident = $expr:expr , $( $tail:tt)*) => {
+    ($expr , build_capture_tuple! { $($tail)* } )
+  };
+  ($id:ident , $( $tail:tt)*) => {
+    ($id , build_capture_tuple! { $($tail)* } )
+  };
+  () => { () };
+}
+#[macro_export]
+macro_rules! build_destructor_tuple {
+  ($ident:ident = $_:expr , $( $tail:tt)*) => {
+    ($ident , build_destructor_tuple! { $($tail)* } )
+  };
+  ($id:ident , $( $tail:tt)*) => {
+    ($id , build_destructor_tuple! { $($tail)* } )
+  };
+  () => { () };
+}
+#[macro_export]
+macro_rules! build_arg_destructor_tuple {
+  ($id:ident , $($tail:tt)*) => {
+    ($id , build_arg_destructor_tuple! { $($tail)* } )
   };
   () => { () };
 }
 
-
+struct Pair<A, B> { a:A, b:B }
 fn test () {
   let str = "!".to_string();
+  let pair = Pair {a:0, b:0.0};
   let _  = closure!([str] | gavno : String , mocha | {
     let _ : String = gavno;
     let _ : usize = mocha ;
