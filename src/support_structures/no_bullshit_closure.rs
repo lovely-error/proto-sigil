@@ -226,31 +226,18 @@ macro_rules! closure {
   => {
     {
       let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
-      let clos = Closure::<
-        _,
-        _ , //flatten_type_list! { mk_ty_rec! { $($($arg_name $(: $ty)? ,)*)? } },
-        _>::init_with_global_mem(
-        env, | env , args : mk_ty_rec! { $($($arg_name $(: $ty)? ,)*)? } |
+      let clos = Closure::init_with_global_mem(
+        env, | env , args : mk_ty_intro! { $($($arg_name $(: $ty)? ,)*)? } |
         $(-> $rt)? {
           let build_destructor_tuple! { $($capt_name $(= $expr)? ,)* }
             = unsafe { env.read() };
-          let build_arg_destructor_tuple! { $($($arg_name ,)*)? }
+          let mk_args_intro! { $($($arg_name ,)*)? }
             = args;
           $bl
         });
       clos
     }
   };
-}
-#[macro_export]
-macro_rules! mk_ty_rec {
-  ($_:ident : $ty:ty , $($tail:tt)*) => {
-    ( $ty , mk_ty_rec! { $($tail)* } )
-  };
-  ($_:ident , $($tail:tt)*) => {
-    ( _ , mk_ty_rec! { $($tail)* } )
-  };
-  () => { () };
 }
 #[macro_export]
 macro_rules! build_capture_tuple {
@@ -273,38 +260,52 @@ macro_rules! build_destructor_tuple {
   () => { () };
 }
 #[macro_export]
-macro_rules! build_arg_destructor_tuple {
+macro_rules! mk_args_intro {
   ($id:ident , $($tail:tt)*) => {
-    ($id , build_arg_destructor_tuple! { $($tail)* } )
+    mk_args_rec! { $id ; $($tail)* }
   };
   () => { () };
 }
 #[macro_export]
-macro_rules! type_list {
-  ($ty:ty , $($tail:tt)*) => {
-    ( $ty , type_list! { $($tail)* } )
+macro_rules! mk_args_rec {
+  ($id:tt ;) => {
+    ($id)
+  };
+  ($($ids:ident),* ; ) => {
+    ( $($ids ,)* )
+  };
+  ($($ids:ident),* ; $id:ident , $($tail:tt)*) => {
+    mk_args_rec! { $($ids ,)*  $id ; $($tail)* }
+  };
+}
+#[macro_export]
+macro_rules! mk_ty_intro {
+  ($_:ident : $ty:ty , $($tail:tt)*) => {
+    mk_ty_rec! { $ty ; $($tail)* }
+  };
+  ($_:ident , $($tail:tt)*) => {
+    mk_ty_rec! { _ ; $($tail)* }
   };
   () => { () };
 }
 #[macro_export]
-macro_rules! flatten_type_list {
-  { ( $ty:ty , () ) } => { $ty };
-  { ( $ty1:ty , $ty2 : ty ) } => {
-    ( $ty1 , flatten_rec! { $ty2 } )
+macro_rules! mk_ty_rec {
+  ( $ty:ty ; ) => {
+    $ty
   };
-  { () } => { () };
-}
-#[macro_export]
-macro_rules! flatten_rec {
-  { ( $ty:ty , () ) } => { $ty };
-  { ( $ty1:ty , $ty2:ty ) } => {
-    $ty1 , flatten_rec! { $ty2 }
+  ($($tys:ty),* ; ) => {
+    ( $($tys ,)* )
+  };
+  ($($tys:ty),* ; $_:ident : $ty:ty , $($tail:tt)*) => {
+    mk_ty_rec! { $($tys ,)*  $ty ; $($tail)* }
+  };
+  ($($tys:ty),* ; $_:ident , $($tail:tt)*) => {
+    mk_ty_rec! { $($tys ,)*  _ ; $($tail)* }
   };
 }
 
-
-fn test () {
-  let _ = closure!([] {
-
+fn oh () {
+  let _ = closure!([] | a : (), b: () | {
+    let a = a;
   });
 }

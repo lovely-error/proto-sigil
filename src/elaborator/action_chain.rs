@@ -1,7 +1,7 @@
 
 use std::{intrinsics::transmute, mem::{size_of, forget}, ptr::addr_of};
 
-use crate::{support_structures::{mini_vector::SomeInlineVector, no_bullshit_closure::SomeSendableClosure}, type_list};
+use crate::{support_structures::{mini_vector::SomeInlineVector, no_bullshit_closure::SomeSendableClosure}, };
 
 use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 
@@ -85,7 +85,7 @@ impl TaskFrameHandle {
 pub struct ActionPtr(u64);
 impl ActionPtr {
   pub fn make_gateway(
-    closure: SomeSendableClosure<type_list!(TaskFrameHandle,), Self>
+    closure: SomeSendableClosure<TaskFrameHandle, Self>
   ) -> Self {
     let boxed_clos = Box::new(closure);
     let mut gateway_ptr = unsafe { transmute::<_, u64>(boxed_clos) };
@@ -103,12 +103,12 @@ impl ActionPtr {
     return Self(number);
   }
   pub fn project_gateway(&self)
-  -> SomeSendableClosure<type_list!(TaskFrameHandle,), Self> { unsafe {
+  -> SomeSendableClosure<TaskFrameHandle, Self> { unsafe {
     let ptr = self.0 >> 4;
     let gw =
       transmute::<
         _,
-        Box<SomeSendableClosure<type_list!(TaskFrameHandle,), Self>>>
+        Box<SomeSendableClosure<TaskFrameHandle, Self>>>
       (ptr);
     return *gw;
   } }

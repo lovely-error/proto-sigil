@@ -12,10 +12,9 @@ use proto_sigil::{elaborator::{
 use proto_sigil::{
   support_structures::no_bullshit_closure::Closure,
   closure,
-  build_arg_destructor_tuple,
   build_capture_tuple,
   build_destructor_tuple,
-  mk_ty_rec, };
+  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, };
 
 static mut FLAG : bool = false;
 
@@ -212,7 +211,7 @@ fn gateway_is_ok () {
   struct Ctx { str: String }
   fn make_task(str: String) -> ActionPtr {
     let gw =
-    closure!([str] |tf:TaskFrameHandle| {
+    closure!([str] | tf:TaskFrameHandle | {
       let frame = tf.interpret_frame::<Ctx>();
       unsafe { addr_of_mut!(frame.str).write(str) };
       return ActionPtr::make_link(LinkKind::Step, read);

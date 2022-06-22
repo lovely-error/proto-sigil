@@ -4,10 +4,9 @@ use std::{thread::{self, sleep}, time::Duration};
 use proto_sigil::{
   support_structures::no_bullshit_closure::{Closure,},
   closure,
-  build_arg_destructor_tuple,
   build_capture_tuple,
   build_destructor_tuple,
-  mk_ty_rec};
+  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, };
 
 
 #[test]
