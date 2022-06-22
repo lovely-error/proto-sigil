@@ -2,13 +2,20 @@
 
 use std::{
   alloc::dealloc, mem::{size_of,}, time::{SystemTime},
-  sync::{atomic::{AtomicU64, Ordering, AtomicBool}}, ptr::addr_of_mut, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher};
+  sync::{atomic::{AtomicU64, Ordering, AtomicBool}}, ptr::{addr_of_mut, null_mut}, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher};
 
-use proto_sigil::elaborator::{
+use proto_sigil::{elaborator::{
   action_chain::{
     ActionPtr, LinkKind, DataFrameSize, TaskGroupHandle, TaskFrameHandle },
-  worker::{WorkGroupRef, WorkGroup},};
+  worker::{WorkGroupRef, WorkGroup},},};
 
+use proto_sigil::{
+  support_structures::no_bullshit_closure::Closure,
+  closure,
+  build_arg_destructor_tuple,
+  build_capture_tuple,
+  build_destructor_tuple,
+  mk_ty_rec, };
 
 static mut FLAG : bool = false;
 
@@ -202,23 +209,36 @@ fn simd () {
 
 #[test]
 fn gateway_is_ok () {
-  // struct Ctx { str: String }
-  // fn some_func(str: String) -> ActionPtr {
-  //   let gw =
-  //   Box::<dyn FnOnce(TaskFrameHandle) -> ActionPtr>::new(|tf|{
-  //     let frame = tf.interpret_frame::<Ctx>();
-  //     addr_of_mut!(frame.str).write(str);
-  //     return ActionPtr::make_link(LinkKind::Step, read);
-  //   });
-  //   fn read(tf : TaskFrameHandle) -> ActionPtr {
-  //     let frame = tf.interpret_frame::<Ctx>();
-  //     println!("{}", frame.str);
-  //     return ActionPtr::make_completion(true);
-  //   }
-  //   let cont = ActionPtr::make_gateway(gw);
-  //   let framed = ActionPtr::make_frame_request(
-  //     DataFrameSize::Bytes56, cont);
-  //   return framed;
-  // }
+  struct Ctx { str: String }
+  fn make_task(str: String) -> ActionPtr {
+    let gw =
+    closure!([str] |tf:TaskFrameHandle| {
+      let frame = tf.interpret_frame::<Ctx>();
+      unsafe { addr_of_mut!(frame.str).write(str) };
+      return ActionPtr::make_link(LinkKind::Step, read);
+    });
+    fn read(tf : TaskFrameHandle) -> ActionPtr {
+      let frame = tf.interpret_frame::<Ctx>();
+      println!("{}", frame.str);
+      assert!(frame.str == "yo");
+      return ActionPtr::make_completion(true);
+    }
+    let cont =
+      ActionPtr::make_gateway(gw.erase_to_sendable());
+    let framed = ActionPtr::make_frame_request(
+      DataFrameSize::Bytes56, cont);
+    return framed;
+  }
+
+  let task = make_task("yo".to_string());
+
+  let w = WorkGroupRef::init(1, task);
+  w.await_completion();
+
 }
 
+#[test]
+fn read_zst_from_null () {
+  let inv : *mut () = null_mut();
+  let () = unsafe { inv.read() };
+}

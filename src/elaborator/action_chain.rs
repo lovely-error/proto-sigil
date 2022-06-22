@@ -1,7 +1,7 @@
 
 use std::{intrinsics::transmute, mem::{size_of, forget}, ptr::addr_of};
 
-use crate::support_structures::mini_vector::SomeInlineVector;
+use crate::{support_structures::{mini_vector::SomeInlineVector, no_bullshit_closure::SomeSendableClosure}, type_list};
 
 use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 
@@ -85,14 +85,14 @@ impl TaskFrameHandle {
 pub struct ActionPtr(u64);
 impl ActionPtr {
   pub fn make_gateway(
-    closure: Box<dyn FnOnce(TaskFrameHandle) -> Self + Send>
-  ) -> Self { unsafe {
-    let mut gateway_ptr = addr_of!(closure) as u64;
+    closure: SomeSendableClosure<type_list!(TaskFrameHandle,), Self>
+  ) -> Self {
+    let boxed_clos = Box::new(closure);
+    let mut gateway_ptr = unsafe { transmute::<_, u64>(boxed_clos) };
     gateway_ptr = (gateway_ptr << 4) + LinkKind::Gateway as u64;
-    forget(closure);
-    let link = transmute::<_, ActionPtr>(gateway_ptr);
+    let link = Self(gateway_ptr);
     return link;
-  } }
+  }
   pub fn make_frame_request(
     frame_size: DataFrameSize,
     action_chain_head: ActionPtr
@@ -103,14 +103,14 @@ impl ActionPtr {
     return Self(number);
   }
   pub fn project_gateway(&self)
-  -> Box<dyn FnOnce(TaskFrameHandle) -> Self + Send> { unsafe {
+  -> SomeSendableClosure<type_list!(TaskFrameHandle,), Self> { unsafe {
     let ptr = self.0 >> 4;
     let gw =
       transmute::<
         _,
-        *const Box<dyn FnOnce(TaskFrameHandle) -> Self + Send>>
+        Box<SomeSendableClosure<type_list!(TaskFrameHandle,), Self>>>
       (ptr);
-    return gw.read();
+    return *gw;
   } }
   pub fn project_link(&self) -> ActionPtr {
     ActionPtr(self.0 >> 8)

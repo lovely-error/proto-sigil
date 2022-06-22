@@ -326,7 +326,7 @@ fn elab_worker_task_loop
               action.project_gateway();
             let frame_handle =
               TaskFrameHandle(task.project_data_frame_ptr());
-            let next = gw(frame_handle);
+            let next = gw.invoke_consume((frame_handle, ()));
             task.inject_action_chain(next);
             continue 'immidiate;
           },
