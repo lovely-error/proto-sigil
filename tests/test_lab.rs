@@ -222,34 +222,3 @@ fn gateway_is_ok () {
   // }
 }
 
-
-// macro_rules! apply {
-//   ($($tokens:tt)*) => {
-//     mk_tuple! { halve! { double! { $($tokens)* } } }
-//   };
-// }
-// macro_rules! double {
-//   (S $($tail:tt)*) => {
-//     S S double! { $($tail)* }
-//   };
-//   (Z) => { Z };
-//   ($($tokens:tt)*) => { $($tokens)* };
-// }
-// macro_rules! halve {
-//   (S S $($tail:tt)*) => {
-//     S halve! { $($tail)* }
-//   };
-//   (Z) => { Z };
-//   ($($tokens:tt)*) => { $($tokens)* };
-// }
-// macro_rules! mk_tuple {
-//   (S $($tail:tt)*) => {
-//     ((), mk_tuple! { $($tail)* } )
-//   };
-//   (Z) => { () };
-//   ($($tokens:tt)*) => { $($tokens)* };
-// }
-
-// fn tupleception () {
-//   let _ = apply! { S S S Z } ;
-// }

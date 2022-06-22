@@ -56,3 +56,8 @@ fn iv_size () {
 //  use std::thread::JoinHandle;
 //   println!("{}", size_of::<JoinHandle<()>>())
 // }
+
+#[test]
+fn zero_types () {
+  assert!(size_of::<(u64, ())>() == size_of::<u64>())
+}

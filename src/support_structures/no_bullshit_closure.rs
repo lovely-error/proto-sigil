@@ -32,15 +32,42 @@ impl <X, Y, I> Closure<X, Y, I> {
   }
 }
 
+fn common_invoke_consume_impl<I, O>(
+  mut target: CommonClosureRepr, args:I
+) -> O { unsafe {
+  let action_ptr = target.project_action_ptr();
+  let fun =
+    transmute::<_, fn (*mut (), I) -> O>(action_ptr);
+  if target.dont_have_env() { // trivial closure
+    let res = (fun)(null_mut(), args);
+    return res;
+  } else {
+    let env_ptr = target.project_env_ptr();
+    let res = (fun)(env_ptr, args);
+    target.mark_as_invoked();
+    drop(target);
+    return res;
+  }
+} }
+fn common_drop_impl(target: &mut CommonClosureRepr) { unsafe {
+  if target.dont_have_env() { return; }
+  let dctor_ptr = target.project_destructor_ptr();
+  let dctor =
+    transmute::<_, fn (*mut (), bool)>(dctor_ptr);
+  let env_ptr = target.project_env_ptr();
+  let need_drop = !target.was_invoked();
+  (dctor)(env_ptr, need_drop);
+} }
+
 impl <X, Y, I> Closure<X, Y, I> {
-  fn dctor(env: *mut (), need_env_drop: bool) { unsafe {
+  fn dctor(env_ptr: *mut (), need_env_drop: bool) { unsafe {
     if need_env_drop {
-      drop_in_place(env.cast::<X>());
+      drop_in_place(env_ptr.cast::<X>())
     }
     dealloc(
-      env.cast::<u8>(),
+      env_ptr.cast::<u8>(),
       Layout::from_size_align_unchecked(
-        size_of::<X>(), align_of::<X>()))
+        size_of::<X>(), align_of::<X>()));
   } }
   pub fn init_with_given_mem(
     mem: *mut (), env: X, fun: fn (*mut X, Y) -> I
@@ -72,32 +99,17 @@ impl <X, Y, I> Closure<X, Y, I> {
     };
   }; }
   pub fn invoke_consume(self, args: Y) -> I { unsafe {
-    let action_ptr = self.project_action_ptr();
-    let fun =
-      transmute::<_, fn (*mut X, Y) -> I>(action_ptr);
-    if self.dont_have_env() { // trivial closure
-      let res = (fun)(null_mut(), args);
-      return res;
-    } else {
-      let mut self_ = self;
-      let env_ptr = self_.project_env_ptr();
-      let res = (fun)(env_ptr.cast::<X>(), args);
-      self_.mark_as_invoked(); // it is already dropped
-      drop(self_);
-      return res;
-    }
+    let common_repr =
+      transmute::<_, CommonClosureRepr>(self);
+    common_invoke_consume_impl(common_repr, args)
   } }
 }
 
 impl <X, Y, I> Drop for Closure<X, Y, I> {
   fn drop(&mut self) { unsafe {
-    if self.dont_have_env() { return; }
-    let dctor_ptr = self.project_destructor_ptr();
-    let dctor =
-      transmute::<_, fn (*mut (), bool)>(dctor_ptr);
-    let env_ptr = self.project_env_ptr();
-    let need_drop = self.was_invoked();
-    (dctor)(env_ptr, need_drop);
+    let common_repr =
+      transmute::<_, &mut CommonClosureRepr>(&mut *self);
+    common_drop_impl(common_repr);
   } }
 }
 
@@ -148,6 +160,11 @@ impl CommonClosureRepr {
     self.0 += 1;
   }
 }
+impl Drop for CommonClosureRepr {
+  fn drop(&mut self) {
+    common_drop_impl(self)
+  }
+}
 
 pub struct SomeClosure<I, O>(u64, u64, PhantomData<(I, O)>);
 
@@ -175,10 +192,31 @@ impl <I, O> SomeClosure<I, O> {
 }
 
 impl <X, Y, I> Closure<X, Y, I> {
-  pub fn erase_env_type(self) -> SomeClosure<Y, I> {
+  pub fn erase_to_some(self) -> SomeClosure<Y, I> {
     unsafe { transmute(self) }
   }
 }
+
+pub struct SomeSendableClosure<I, O>(u64,u64, PhantomData<(I, O)>);
+
+impl <I, O> SomeSendableClosure<I, O> {
+  pub fn erase_to_some(self) -> SomeClosure<I, O> {
+    unsafe { transmute(self) }
+  }
+  pub fn invoke_consume(self, args: I) -> O {
+    let common_repr = unsafe { transmute(self) };
+    return common_invoke_consume_impl(common_repr, args)
+  }
+}
+
+unsafe impl <I, O> Send for SomeSendableClosure<I, O> {}
+
+impl <X, Y, I> Closure<X, Y, I> where X:Send {
+  pub fn erase_to_sendable(self) -> SomeSendableClosure<Y, I> {
+    unsafe { transmute(self) }
+  }
+}
+
 
 #[macro_export]
 macro_rules! closure {
@@ -250,15 +288,4 @@ macro_rules! build_arg_destructor_tuple {
     ($id , build_arg_destructor_tuple! { $($tail)* } )
   };
   () => { () };
-}
-
-struct Pair<A, B> { a:A, b:B }
-fn test () {
-  let str = "!".to_string();
-  let pair = Pair {a:0, b:0.0};
-  let _  = closure!([str] | gavno : String , mocha | {
-    let _ : String = gavno;
-    let _ : usize = mocha ;
-    println!("{}", str)
-  });
 }
