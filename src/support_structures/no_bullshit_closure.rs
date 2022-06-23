@@ -5,10 +5,31 @@ use std::{
   intrinsics::{transmute,},};
 
 
-#[repr(align(16))]
-pub struct Closure<Env, I, O>(u64,u64, PhantomData<(Env, I, O)>);
 
-impl <X, Y, I> Closure<X, Y, I> {
+pub struct LocalClosure<Env, I, O>
+(Env, fn (&mut Env, I) -> O);
+impl <X, Y, I> LocalClosure< X, Y, I> {
+  pub fn init(env:X, fun: fn (&mut X, Y) -> I) -> Self {
+    Self(env, fun)
+  }
+  pub fn invoke_once(&mut self, args: Y) -> I {
+    (self.1)(&mut self.0, args)
+  }
+}
+impl <X, Y, I> LocalClosure< X, Y, I> where X:Clone {
+  pub fn escape(self) -> DetachedClosure<X, Y, I> {
+    let fun = unsafe { transmute(self.1) };
+    DetachedClosure::init_with_global_mem(self.0.clone(), fun)
+  }
+}
+
+unsafe impl <X, Y, I> Send for LocalClosure< X, Y, I> where X:Send {}
+
+
+#[repr(align(16))]
+pub struct DetachedClosure<Env, I, O>(u64,u64, PhantomData<(Env, I, O)>);
+
+impl <X, Y, I> DetachedClosure<X, Y, I> {
   fn project_env_ptr(&self) -> *mut () {
     (self.0 >> 1) as *mut ()
   }
@@ -59,7 +80,7 @@ fn common_drop_impl(target: &mut CommonClosureRepr) { unsafe {
   (dctor)(env_ptr, need_drop);
 } }
 
-impl <X, Y, I> Closure<X, Y, I> {
+impl <X, Y, I> DetachedClosure<X, Y, I> {
   fn dctor(env_ptr: *mut (), need_env_drop: bool) { unsafe {
     if need_env_drop {
       drop_in_place(env_ptr.cast::<X>())
@@ -105,7 +126,7 @@ impl <X, Y, I> Closure<X, Y, I> {
   } }
 }
 
-impl <X, Y, I> Drop for Closure<X, Y, I> {
+impl <X, Y, I> Drop for DetachedClosure<X, Y, I> {
   fn drop(&mut self) { unsafe {
     let common_repr =
       transmute::<_, &mut CommonClosureRepr>(&mut *self);
@@ -114,7 +135,7 @@ impl <X, Y, I> Drop for Closure<X, Y, I> {
 }
 
 
-impl <X, Y, I> Clone for Closure<X, Y, I> where X:Clone {
+impl <X, Y, I> Clone for DetachedClosure<X, Y, I> where X:Clone {
   fn clone(&self) -> Self { unsafe {
     if self.dont_have_env() { // just copy bytes
       let copy =
@@ -133,8 +154,8 @@ impl <X, Y, I> Clone for Closure<X, Y, I> where X:Clone {
   } }
 }
 
-unsafe impl <X, Y, I> Send for Closure<X, Y, I> where X:Send {}
-unsafe impl <X, Y, I> Sync for Closure<X, Y, I> where X:Sync {}
+unsafe impl <X, Y, I> Send for DetachedClosure<X, Y, I> where X:Send {}
+
 
 struct CommonClosureRepr(u64,u64);
 impl CommonClosureRepr {
@@ -158,11 +179,6 @@ impl CommonClosureRepr {
   }
   fn mark_as_invoked(&mut self) {
     self.0 += 1;
-  }
-}
-impl Drop for CommonClosureRepr {
-  fn drop(&mut self) {
-    common_drop_impl(self)
   }
 }
 
@@ -191,7 +207,14 @@ impl <I, O> SomeClosure<I, O> {
   }; }
 }
 
-impl <X, Y, I> Closure<X, Y, I> {
+impl <I, O> Drop for SomeClosure<I, O> {
+  fn drop(&mut self) {
+    let common_repr = unsafe { transmute(self) };
+    common_drop_impl(common_repr)
+  }
+}
+
+impl <X, Y, I> DetachedClosure<X, Y, I> {
   pub fn erase_to_some(self) -> SomeClosure<Y, I> {
     unsafe { transmute(self) }
   }
@@ -211,22 +234,28 @@ impl <I, O> SomeSendableClosure<I, O> {
 
 unsafe impl <I, O> Send for SomeSendableClosure<I, O> {}
 
-impl <X, Y, I> Closure<X, Y, I> where X:Send {
+impl <X, Y, I> DetachedClosure<X, Y, I> where X:Send {
   pub fn erase_to_sendable(self) -> SomeSendableClosure<Y, I> {
     unsafe { transmute(self) }
   }
 }
 
+impl <I, O> Drop for SomeSendableClosure<I, O> {
+  fn drop(&mut self) {
+    let common_repr = unsafe { transmute(self) };
+    common_drop_impl(common_repr)
+  }
+}
 
 #[macro_export]
-macro_rules! closure {
+macro_rules! detached {
   ( [ $($capt_name:ident $(= $expr:expr)?),* ]
     $(| $( $arg_name:ident $(: $ty:ty)? ),* |)?
     $(-> $rt:ty)? $bl:block )
   => {
     {
       let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
-      let clos = Closure::init_with_global_mem(
+      let clos = DetachedClosure::init_with_global_mem(
         env, | env , args : mk_ty_intro! { $($($arg_name $(: $ty)? ,)*)? } |
         $(-> $rt)? {
           let build_destructor_tuple! { $($capt_name $(= $expr)? ,)* }
@@ -268,8 +297,8 @@ macro_rules! mk_args_intro {
 }
 #[macro_export]
 macro_rules! mk_args_rec {
-  ($id:tt ;) => {
-    ($id)
+  ($id:ident ;) => {
+    $id
   };
   ($($ids:ident),* ; ) => {
     ( $($ids ,)* )
@@ -305,7 +334,38 @@ macro_rules! mk_ty_rec {
 }
 
 fn oh () {
-  let _ = closure!([] | a : (), b: () | {
-    let a = a;
+  let a = ();
+  let b = ();
+  let _ = detached!([a, b] | a , b: () | {
+    let a : () = a;
+  });
+}
+
+#[macro_export]
+macro_rules! local {
+  ( [ $($capt_name:ident $(= $expr:expr)?),* ]
+    $(| $( $arg_name:ident $(: $ty:ty)? ),* |)?
+    $(-> $rt:ty)? $bl:block )
+  => {
+    {
+      let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
+      let clos = LocalClosure::init(
+        env, | env , args : mk_ty_intro! { $($($arg_name $(: $ty)? ,)*)? } |
+        $(-> $rt)? {
+          let build_destructor_tuple! { $($capt_name $(= $expr)? ,)* }
+            = env;
+          let mk_args_intro! { $($($arg_name ,)*)? }
+            = args;
+          $bl
+        });
+      clos
+    }
+  };
+}
+
+fn o () {
+  let a = "";
+  let _ = local!([a] {
+    println!("{a}")
   });
 }

@@ -2,11 +2,11 @@
 use std::{thread::{self, sleep}, time::Duration};
 
 use proto_sigil::{
-  support_structures::no_bullshit_closure::{Closure,},
-  closure,
+  support_structures::no_bullshit_closure::{DetachedClosure,LocalClosure},
+  detached,
   build_capture_tuple,
   build_destructor_tuple,
-  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, };
+  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, local, };
 
 
 #[test]
@@ -15,7 +15,7 @@ fn clos_works() {
   let str = "ho".to_string();
   let ctx = Ctx { str };
   let clos =
-  Closure::<Ctx, (), _>::init_with_global_mem(
+  DetachedClosure::<Ctx, (), _>::init_with_global_mem(
   ctx, |env, _| {
     let env = unsafe { env.read() };
     println!("{}", env.str)
@@ -27,7 +27,7 @@ fn clos_works() {
 #[test]
 fn clos_works2 () {
   let str = "yo".to_string();
-  let clos = closure!([str] {
+  let clos = detached!([str] {
     assert!("yo" == str)
   });
   clos.invoke_consume(());
@@ -35,7 +35,7 @@ fn clos_works2 () {
 
 #[test]
 fn clos_works3 () {
-  let clos = closure!([] {
+  let clos = detached!([] {
     assert!(true)
   });
   clos.invoke_consume(());
@@ -43,7 +43,7 @@ fn clos_works3 () {
 
 #[test]
 fn clos_works4 () {
-  let clos = closure!([] {
+  let clos = detached!([] {
     100
   });
   let thing = clos.erase_to_some().try_invoke(()).unwrap();
@@ -53,7 +53,8 @@ fn clos_works4 () {
 #[test]
 fn clos_works5 () {
   let mut str = "yo".to_string();
-  let clos = closure!([str = &mut str] {
+  let clos =
+  detached!([str = &mut str] {
     str.push_str(" sup?")
   });
   let () = clos.erase_to_some().try_invoke(()).unwrap();
@@ -63,7 +64,7 @@ fn clos_works5 () {
 #[test]
 fn clos_works6 () {
   let mut str = "yo".to_string();
-  let clos = closure!([str = &mut str] {
+  let clos = detached!([str = &mut str] {
     str.push_str(" sup?")
   });
   let mut clos = clos.erase_to_some();
@@ -76,7 +77,7 @@ fn clos_works6 () {
 #[test]
 fn clos_works7 () {
   let num = 0u64;
-  let clos = closure!([num] {
+  let clos = detached!([num] {
     return num;
   });
   let num = clos.erase_to_sendable().invoke_consume(());
@@ -87,7 +88,7 @@ fn clos_works7 () {
 fn clos_works8 () {
   let _ = thread::spawn(move || {
     let str = "yo";
-    let clos = closure!([str] {
+    let clos = detached!([str] {
       assert!(str == "yo");
       //println!("{str}");
     });
@@ -98,4 +99,17 @@ fn clos_works8 () {
     });
   });
   sleep(Duration::from_secs(1));
+}
+
+
+#[test]
+fn clos_works9 () {
+  let mut str = "".to_string();
+  let mut clos =
+  local!([str = &mut str] {
+    str.push_str("!")
+  });
+  clos.invoke_once(());
+  clos.invoke_once(());
+  assert!(str == "!!");
 }

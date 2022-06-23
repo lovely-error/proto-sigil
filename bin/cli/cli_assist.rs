@@ -132,6 +132,7 @@ impl KnotState {
     }
   }
   pub fn run(&mut self) {
+    self.write_line("\n");
     self.present_header();
     loop {
       //self.write_lines(&[DIM, ">", DN, " ", "\n"], None);

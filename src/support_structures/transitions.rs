@@ -67,3 +67,4 @@ impl <V> Transient<V, ()> for Option<V> {
     }
   }
 }
+

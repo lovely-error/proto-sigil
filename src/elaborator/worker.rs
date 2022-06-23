@@ -8,11 +8,11 @@ use std::{
     alloc::{Layout, alloc}};
 use crate::{elaborator::{
   frame_allocator::{GranularSlabAllocator, SlabSize,},
-  action_chain::{DataFrameSize, TaskFrameHandle}},
+  action_chain::{DataFrameSize, TaskHandle,}},
   support_structures::mini_vector::InlineVector};
 
 use super::{
-  action_chain::{Task, LinkKind, ActionPtr, TaskGroupHandle},
+  action_chain::{Task, LinkKind, ActionLink, TaskGroupHandle},
   frame_allocator::MemorySlabControlItem};
 
 #[derive(Debug)]
@@ -135,9 +135,9 @@ fn elab_worker_task_loop
     unsafe { MaybeUninit::uninit().assume_init() };
   let mut limit: u16 = 0;
   let mut spawned_subtasks =
-    InlineVector::<32, Task>::init();
+    InlineVector::<24, Task>::init();
   let mut pending_tasks =
-    InlineVector::<8, Task>::init();
+    InlineVector::<6, Task>::init();
   'main : loop {
     if stop_flag_ref.load(Ordering::Relaxed) { break 'main; };
     // take a couple of tasks to this thread's storage
@@ -275,25 +275,11 @@ fn elab_worker_task_loop
             let work =
               action.project_fun_ptr();
             let df_ptr = task.project_data_frame_ptr();
-            let tf_handle = TaskFrameHandle(df_ptr);
+            let tf_handle =
+              TaskHandle(addr_of_mut!(spawned_subtasks), df_ptr);
             let done_work = work(tf_handle);
             task.inject_action_chain(done_work);
             continue 'immidiate;
-          },
-          LinkKind::Fanout => {
-            // current task want to spawn subtasks
-            let df_ptr = task.project_data_frame_ptr();
-            let tf_handle = TaskFrameHandle(df_ptr);
-            let tg_handle =
-              TaskGroupHandle(
-                &mut spawned_subtasks, df_ptr);
-            let setuper =
-              action.project_setup_shim_ptr();
-            let continuation = setuper(tf_handle, tg_handle);
-            let mut dependent_task = *task;
-            dependent_task.inject_action_chain(continuation);
-            spawned_subtasks.append(dependent_task);
-
           },
           LinkKind::Completion => {
             // task is done
@@ -302,15 +288,14 @@ fn elab_worker_task_loop
               task_frame_allocator.release_memory(
                 task.project_data_frame_ptr());
             }
-
           },
           LinkKind::ProgressCheck => {
             // some dependent task want to check in
             // to see if all of its blockers were resolved
             let checker =
               action.project_progress_checker();
-            let frame_ptr =
-              TaskFrameHandle(task.project_data_frame_ptr());
+            let frame_ptr = TaskHandle(
+              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr());
             let smth = checker(frame_ptr);
             if let Some(patch) = smth {
               // it can, indeed, continue
@@ -324,13 +309,12 @@ fn elab_worker_task_loop
           LinkKind::Gateway => {
             let gw =
               action.project_gateway();
-            let frame_handle =
-              TaskFrameHandle(task.project_data_frame_ptr());
+            let frame_handle = TaskHandle(
+              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr());
             let next = gw.invoke_consume(frame_handle);
             task.inject_action_chain(next);
             continue 'immidiate;
           },
-          LinkKind::Callback => todo!(),
         }
         break 'immidiate;
       }
@@ -359,7 +343,7 @@ fn elab_worker_task_loop
 
 pub struct WorkGroupRef(Box<WorkGroup>);
 impl WorkGroupRef {
-  pub fn init(thread_count: u16, work_graph: ActionPtr) -> WorkGroupRef {
+  pub fn init(thread_count: u16, work_graph: ActionLink) -> WorkGroupRef {
   unsafe {
     let mut wg =
       Box::<MaybeUninit<WorkGroup>>::new(MaybeUninit::uninit());
@@ -385,7 +369,7 @@ impl WorkGroupRef {
       let threads_ptr = addr_of_mut!(data.executors) as usize;
       let lc = &data.liveness_count;
       let thread = spawn(move || {
-        elab_worker_task_loop::<4>(
+        elab_worker_task_loop::<8>(
           stop_flag_ref, queue_ref,
           threads_ptr as *mut _, lc);
       });
@@ -401,7 +385,7 @@ impl WorkGroupRef {
     }
   }
   pub fn signal_to_stop(&self) {
-    self.0.was_signaled_to_stop.fetch_or(true, Ordering::Relaxed);
+    self.0.was_signaled_to_stop.store(true, Ordering::Relaxed);
   }
 }
 

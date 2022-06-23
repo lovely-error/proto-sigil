@@ -6,12 +6,12 @@ use std::{
 
 use proto_sigil::{elaborator::{
   action_chain::{
-    ActionPtr, LinkKind, DataFrameSize, TaskGroupHandle, TaskFrameHandle },
+    ActionLink, LinkKind, DataFrameSize, TaskGroupHandle, TaskHandle, },
   worker::{WorkGroupRef, WorkGroup},},};
 
 use proto_sigil::{
-  support_structures::no_bullshit_closure::Closure,
-  closure,
+  support_structures::no_bullshit_closure::DetachedClosure,
+  detached,
   build_capture_tuple,
   build_destructor_tuple,
   mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, };
@@ -52,48 +52,43 @@ fn must_work () {
 
   const Limit : u64 = 1024;
   struct Ctx { pub counter: AtomicU64 }
-  fn bump(tf : TaskFrameHandle) -> ActionPtr {
+  fn bump(tf : TaskHandle) -> ActionLink {
     let ctx = tf.interpret_frame::<Ctx>();
     let _ = ctx.counter.fetch_add(1, Ordering::Relaxed);
-    return ActionPtr::make_completion(false);
+    return ActionLink::make_completion(false);
   }
-  fn swarm_setup_shim(
-    _ : TaskFrameHandle, mut handle: TaskGroupHandle
-  ) -> ActionPtr {
-    for _ in 0 .. Limit {
-      let work_item =
-        ActionPtr::make_link(LinkKind::Step, bump);
-      handle.assign_work(work_item);
-    };
-    fn checker(tf : TaskFrameHandle) -> Option<ActionPtr> {
-      //println!("Condition checker pocked!");
-      let ctx = tf.interpret_frame::<Ctx>();
-      let count = ctx.counter.load(Ordering::Relaxed);
-      if count == Limit {
-        return Some(ActionPtr::make_link(LinkKind::Step, done));
-      }
-      return None;
-    }
-    return ActionPtr::make_progress_checker(checker);
-  }
-  fn done(tf : TaskFrameHandle) -> ActionPtr {
+  fn done(tf : TaskHandle) -> ActionLink {
     //println!("you have gazed at miracles!");
     let ctx = tf.interpret_frame::<Ctx>();
     //println!("{}", ctx.counter.load(Ordering::Relaxed));
     assert_eq!(ctx.counter.load(Ordering::Relaxed), Limit);
-    return ActionPtr::make_completion(true);
+    return ActionLink::make_completion(true);
   }
-  fn begin(tf : TaskFrameHandle) -> ActionPtr {
-    let ctx = tf.interpret_frame::<Ctx>();
+  fn begin(mut handle : TaskHandle) -> ActionLink {
+    let ctx = handle.interpret_frame::<Ctx>();
     ctx.counter = AtomicU64::new(0);
     //println!("Greetings!\nWitness the swarm!");
-    return ActionPtr::make_fanout(swarm_setup_shim);
+    for _ in 0 .. Limit {
+      let work_item =
+        ActionLink::make_link(LinkKind::Step, bump);
+      handle.assign_work(work_item);
+    };
+    fn checker(tf : TaskHandle) -> Option<ActionLink> {
+      //println!("Condition checker pocked!");
+      let ctx = tf.interpret_frame::<Ctx>();
+      let count = ctx.counter.load(Ordering::Relaxed);
+      if count == Limit {
+        return Some(ActionLink::make_link(LinkKind::Step, done));
+      }
+      return None;
+    }
+    return ActionLink::make_progress_checker(checker);
   }
 
   let init =
-    ActionPtr::make_link(LinkKind::Step, begin);
+    ActionLink::make_link(LinkKind::Step, begin);
   let work_graph =
-    ActionPtr::make_frame_request(
+    ActionLink::make_frame_request(
       DataFrameSize::Bytes120, init);
 
   // let start = SystemTime::now();
@@ -131,44 +126,41 @@ fn scope () {
 #[test]
 fn children_see_parrents() {
   struct Ctx { str: String, done: AtomicBool }
-  fn step2(tf : TaskFrameHandle) -> ActionPtr {
+  fn step2(tf : TaskHandle) -> ActionLink {
     let pf = tf.get_parrent_frame().unwrap();
     let parent_frame = pf.interpret_frame::<Ctx>();
     //println!("{}", parent_frame.str);
     assert_eq!(parent_frame.str, "I do exist!");
     parent_frame.done.store(true, Ordering::Relaxed);
-    return ActionPtr::make_completion(true);
+    return ActionLink::make_completion(true);
   }
-  fn deleter(_ : TaskFrameHandle) -> ActionPtr {
-    return ActionPtr::make_completion(true);
+  fn deleter(_ : TaskHandle) -> ActionLink {
+    return ActionLink::make_completion(true);
   }
-  fn checker(tf : TaskFrameHandle) -> Option<ActionPtr> {
+  fn checker(tf : TaskHandle) -> Option<ActionLink> {
     let frame = tf.interpret_frame::<Ctx>();
     let done = frame.done.load(Ordering::Relaxed);
     if done {
       return Some(
-        ActionPtr::make_link(LinkKind::Step, deleter)); }
+        ActionLink::make_link(LinkKind::Step, deleter)); }
     return None;
   }
-  fn spawn(_ : TaskFrameHandle, mut tg : TaskGroupHandle) -> ActionPtr {
-    let p = ActionPtr::make_link(
-      LinkKind::Step, step2);
-    let p = ActionPtr::make_frame_request(
-        DataFrameSize::Bytes56, p);
-    tg.assign_work(p);
-    return ActionPtr::make_progress_checker(checker);
-  }
-  fn step1(tf : TaskFrameHandle) -> ActionPtr { unsafe {
+  fn step1(mut tf : TaskHandle) -> ActionLink { unsafe {
     let frame = tf.interpret_frame::<Ctx>();
     addr_of_mut!(frame.str).write(String::new());
     frame.str.push_str("I do exist!");
     frame.done = AtomicBool::new(false);
-    return ActionPtr::make_fanout(spawn);
+    let p = ActionLink::make_link(
+      LinkKind::Step, step2);
+    let p = ActionLink::make_frame_request(
+        DataFrameSize::Bytes56, p);
+    tf.assign_work(p);
+    return ActionLink::make_progress_checker(checker);
   } }
 
   let ptr =
-    ActionPtr::make_link(LinkKind::Step, step1);
-  let ptr = ActionPtr::make_frame_request(
+    ActionLink::make_link(LinkKind::Step, step1);
+  let ptr = ActionLink::make_frame_request(
     DataFrameSize::Bytes56, ptr);
 
   // let start = SystemTime::now();
@@ -209,22 +201,22 @@ fn simd () {
 #[test]
 fn gateway_is_ok () {
   struct Ctx { str: String }
-  fn make_task(str: String) -> ActionPtr {
+  fn make_task(str: String) -> ActionLink {
     let gw =
-    closure!([str] | tf:TaskFrameHandle | {
+    detached!([str] | tf:TaskHandle | {
       let frame = tf.interpret_frame::<Ctx>();
       unsafe { addr_of_mut!(frame.str).write(str) };
-      return ActionPtr::make_link(LinkKind::Step, read);
+      return ActionLink::make_link(LinkKind::Step, read);
     });
-    fn read(tf : TaskFrameHandle) -> ActionPtr {
+    fn read(tf : TaskHandle) -> ActionLink {
       let frame = tf.interpret_frame::<Ctx>();
       println!("{}", frame.str);
       assert!(frame.str == "yo");
-      return ActionPtr::make_completion(true);
+      return ActionLink::make_completion(true);
     }
     let cont =
-      ActionPtr::make_gateway(gw.erase_to_sendable());
-    let framed = ActionPtr::make_frame_request(
+      ActionLink::make_gateway(gw.erase_to_sendable());
+    let framed = ActionLink::make_frame_request(
       DataFrameSize::Bytes56, cont);
     return framed;
   }

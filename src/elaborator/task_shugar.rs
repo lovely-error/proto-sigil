@@ -9,7 +9,7 @@ macro_rules! task {
 }
 #[macro_export]
 macro_rules! task_unfolding_loop {
-  (async let $binder:pat = $expr:expr ; $($tail:tt)*) => {
+  (await let $binder:pat = $expr:expr ; $($tail:tt)*) => {
 
     task_unfolding_loop! { $($tail)* }
   };
@@ -25,7 +25,7 @@ macro_rules! task_unfolding_loop {
 }
 
 fn test () { task! {
-  async let () = () ;
+  await let () = () ;
   let a = 0 ;
   go println!("{}", a) ;
 } }
