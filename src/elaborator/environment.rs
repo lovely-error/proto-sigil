@@ -6,6 +6,8 @@ use std::{
   sync::atomic::{AtomicU64, Ordering, AtomicBool, fence},
   ptr::{drop_in_place, null_mut}, };
 
+use crate::{support_structures::traversing::Stream, trees::raw_syntax_nodes::DeclPtr};
+
 
 
 // Associative table that is concurrently accessible for writes and reads.
@@ -194,7 +196,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
   pub fn freeze(&self) {
     self.is_frozen.store(true, Ordering::Relaxed);
     self.least_crowded_page_ptr.store(0, Ordering::Relaxed);
-    fence(Ordering::Release);
     self.compress();
     self.shrink();
   }
@@ -230,7 +231,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
 
         let collided = (occupation_map & index) != 0;
         if collided { // goto next bucket
-          fence(Ordering::Acquire); // no spec here
           if next.is_null() { // need more storage
             Self::handle_storage_shortage(bucket_ptr);
             //fence(Ordering::Release);
@@ -240,9 +240,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           let page_is_overpopulated =
             occupation_map.count_ones() > 54;
           if page_is_overpopulated {
-            // change write ptr to next page
-            fence(Ordering::Release);
-            // page update must be done here
             self.least_crowded_page_ptr.store(
               bucket_ptr as u64, Ordering::Relaxed);
           }
@@ -262,7 +259,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
               index, Ordering::Relaxed);
             if (prior & index) != 0 { // someone did it already, rerun
               if next.is_null() { // need more storage
-                //fence(Ordering::SeqCst);
                 Self::handle_storage_shortage(bucket_ptr);
               } else {
                 bucket_ptr = next;
@@ -276,11 +272,10 @@ impl <K: Hash, V> PasteboardTable<K, V> {
         },
       }
     }
-    //fence(Ordering::Release);
     bucket_ptr.cast::<(u64, V)>()
     .add(((64 - number_of_free_slots) + offset) as usize)
     .write((hash, value));
-
+    fence(Ordering::Release);
   } }
   // ATC is (n / (63 - m) - k) where m in [0;10]
   // Sensitive to the how far from head item being retrieved is located.
@@ -314,6 +309,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           &*bucket_ptr.cast::<(u64, V)>()
           .add(((64 - number_of_free_slots) + offset) as usize);
         if *stored_key_hash == hash {
+          fence(Ordering::Acquire);
           return Some(value);
         }
       } else {
@@ -321,7 +317,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           return None;
         }
       }
-      fence(Ordering::Release);
       let next_bucket_ptr =
         (&header.next_bucket_ptr).load(Ordering::Relaxed) as *mut ();
       if next_bucket_ptr.is_null() { return None; };
@@ -375,3 +370,71 @@ impl <K: Hash, V> Drop for PasteboardTable<K, V> {
 
 unsafe impl <K: Hash, V> Send for PasteboardTable<K, V> {}
 unsafe impl <K: Hash, V> Sync for PasteboardTable<K, V> {}
+
+
+pub struct DefaultTableStreamingIterator<V>(u64, PhantomData<V>);
+
+impl <V> DefaultTableStreamingIterator<V> {
+  fn project_bucket_ptr(&self) -> *mut () {
+    (self.0 >> 8) as *mut ()
+  }
+  fn inject_bucket_ptr(&mut self, bucket_ptr: *mut ()) {
+    let index = self.project_index();
+    let new_ptr = (bucket_ptr as u64) << 8;
+    self.0 = new_ptr + index as u64;
+  }
+  fn project_index(&self) -> u8 {
+    self.0 as u8
+  }
+  fn inject_index(&mut self, index: u8) {
+    self.0 = (self.0 & !0xFF) + index as u64;
+  }
+  pub fn init<K: Hash>(table_ref: &PasteboardTable<K, V>) -> Self {
+    let initial_bucket = table_ref.head_ptr;
+    let pd = (initial_bucket as u64) << 8;
+    return Self(pd, PhantomData)
+  }
+}
+
+impl <V: Copy> Stream<V> for DefaultTableStreamingIterator<V> {
+  fn next(&mut self) -> Option<V> { unsafe {
+    let mut bucket_ptr = self.project_bucket_ptr();
+    if bucket_ptr.is_null() { return None; }
+    let mut index = self.project_index();
+    let initial_offset =
+      64 - (64 - (16 / size_of::<(u64, V)>().max(1) as u64));
+    'that : loop {
+      let map =
+        (&*bucket_ptr.cast::<BucketHeader>())
+        .occupation_map.load(Ordering::Relaxed);
+      while index != 64 && (map & (1 << index)) == 0 {
+        index += 1;
+      }
+      if index == 64 {
+        bucket_ptr =
+          (&*bucket_ptr.cast::<BucketHeader>())
+          .next_bucket_ptr.load(Ordering::Relaxed) as *mut ();
+        self.inject_bucket_ptr(bucket_ptr);
+        if bucket_ptr.is_null() {
+          return None
+        }
+        index = 0;
+        continue 'that;
+      }
+      break;
+    }
+    let (_, value) =
+      *bucket_ptr.cast::<(u64, V)>()
+      .add(index as usize + initial_offset as usize);
+    index += 1;
+    self.inject_index(index);
+    return Some(value);
+  }; }
+}
+
+impl <V: Copy> Iterator for DefaultTableStreamingIterator<V> {
+  type Item = V;
+  fn next(&mut self) -> Option<Self::Item> {
+    <Self as Stream<V>>::next(self)
+  }
+}

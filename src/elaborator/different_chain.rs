@@ -1,7 +1,7 @@
 
 use std::marker::PhantomData;
 
-use super::action_chain::{TaskHandle, TaskGroupHandle};
+use super::action_chain::{TaskHandle,};
 
 
 trait TypeList {

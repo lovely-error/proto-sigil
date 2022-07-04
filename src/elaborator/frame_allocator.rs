@@ -1,9 +1,11 @@
 
 use std::{
-  intrinsics::transmute,
+  intrinsics::{transmute,},
   sync::atomic::{AtomicU64, Ordering, fence},
-  ptr::null_mut,
-  alloc::{Layout, alloc, dealloc}};
+  ptr::{null_mut, drop_in_place},
+  alloc::{Layout, alloc, dealloc}, mem::{needs_drop, size_of}, ops::SubAssign};
+
+use super::action_chain::TaskHandle;
 
 
 #[repr(align(8))] #[derive(Debug, Clone, Copy)]
@@ -47,23 +49,23 @@ impl GranularSlabAllocator {
   ) -> MemorySlabControlItem {
     let page_ptr: &mut *mut ();
     let control_item: MemorySlabControlItem;
-    let full_mask: u64;
+    let page_maximum: u32;
     match slab_size {
       SlabSize::Bytes128 => {
         page_ptr = &mut self.b128_page_ptr;
-        full_mask = (1 << 32) - 1;
+        page_maximum = 32;
       },
       SlabSize::Bytes256 => {
         page_ptr = &mut self.b256_page_prt ;
-        full_mask = (1 << 16) - 1;
+        page_maximum = 16;
       },
       SlabSize::Bytes512 => {
         page_ptr = &mut self.b512_page_ptr;
-        full_mask = (1 << 8) - 1;
+        page_maximum = 8;
       },
       SlabSize::Bytes64 => {
         page_ptr = &mut self.b64_page_ptr;
-        full_mask = !0u64;
+        page_maximum = 64 ;
       },
     }
     let mut offset: u32;
@@ -98,9 +100,7 @@ impl GranularSlabAllocator {
       'spininng : loop {
         page_header = PageHeaderData(page_header_);
         offset = page_header.get_occupation_map().trailing_ones();
-        free_slab_index = 1 << offset;
-        // may encounter full page
-        let is_full = free_slab_index >= full_mask;
+        let is_full = offset == page_maximum;
         if is_full {
           // this page is full, detach it!
           fence(Ordering::Release);
@@ -108,6 +108,8 @@ impl GranularSlabAllocator {
           *page_ptr = null_mut();
           continue 'paging;
         }
+        free_slab_index = 1 << offset;
+        // may encounter full page
         let new = page_header_ | free_slab_index;
         let outcome =
           page_header_ref.compare_exchange_weak(
@@ -239,4 +241,84 @@ impl MemorySlabControlItem {
       base_ptr.cast::<[u64;8]>()
       .add(index * size).cast::<()>() }
   }
+}
+
+
+pub struct RCTaskBox<T> {
+  pub(super) storage_ptr: *mut (u64, MemorySlabControlItem, T)
+}
+
+impl <T> RCTaskBox<T> {
+  pub fn init(handle: TaskHandle, value: T) -> Self {
+    unsafe {
+      let size = match size_of::<(MemorySlabControlItem, T)>() {
+        0 ..= 65 => SlabSize::Bytes64,
+        0 ..= 129 => SlabSize::Bytes128,
+        0 ..= 257 => SlabSize::Bytes256,
+        0 ..= 513 => SlabSize::Bytes512,
+        _ => panic!("Value is too big to fit into task local box")
+      };
+      let mem = handle.request_slab(size);
+      let ptr =
+        mem.project_slab_ptr().cast::<(u64, MemorySlabControlItem, T)>();
+      ptr.write((0, mem, value));
+      return RCTaskBox { storage_ptr: ptr }
+    }
+  }
+  pub fn get_ref(&self) -> &T { unsafe {
+    &*self.storage_ptr.cast::<u64>().add(2).cast::<T>()
+  } }
+  pub fn unbox(self, handle: TaskHandle) -> T { unsafe {
+    let (_, mci, val) = self.storage_ptr.read();
+    (&mut *handle.2).release_memory(mci);
+    return val;
+  } }
+  pub fn vend_ref(&self) -> RcTaskBoxRef<T> {
+    unsafe { *self.storage_ptr.cast::<u64>() += 1 };
+    return RcTaskBoxRef { storage_ptr: self.storage_ptr }
+  }
+}
+
+impl <T> Drop for RCTaskBox<T> {
+  fn drop(&mut self) { unsafe {
+    let rc = *self.storage_ptr.cast::<u64>();
+    if rc == 0 {
+      let (_, mci, val) = self.storage_ptr.read();
+      drop(val);
+      let mask = 1u64 << mci.project_index();
+      let header = &*mci.project_base_ptr().cast::<AtomicU64>();
+      let _ = header.fetch_xor(mask, Ordering::Relaxed);
+      // page may leak, but it is very unlikely
+    }
+  } }
+}
+
+#[derive(Debug)]
+pub struct RcTaskBoxRef<T> {
+  pub(super) storage_ptr: *mut (u64, MemorySlabControlItem, T)
+}
+impl <T> RcTaskBoxRef<T> {
+  pub fn get_ref(&self) -> &T { unsafe {
+    &*self.storage_ptr.cast::<u64>().add(2).cast::<T>()
+  } }
+}
+impl <T> Clone for RcTaskBoxRef<T> {
+  fn clone(&self) -> Self {
+    Self { storage_ptr: self.storage_ptr }
+  }
+}
+
+impl <T> Drop for RcTaskBoxRef<T> {
+  fn drop(&mut self) { unsafe {
+    *self.storage_ptr.cast::<u64>() -= 1;
+    let rc = *self.storage_ptr.cast::<u64>();
+    if rc == 0 {
+      let (_, mci, val) = self.storage_ptr.read();
+      drop(val);
+      let mask = 1u64 << mci.project_index();
+      let header = &*mci.project_base_ptr().cast::<AtomicU64>();
+      let _ = header.fetch_xor(mask, Ordering::Relaxed);
+      // page may leak, but it is very unlikely
+    }
+  } }
 }

@@ -6,7 +6,7 @@ use std::{
 
 use proto_sigil::{elaborator::{
   action_chain::{
-    ActionLink, LinkKind, DataFrameSize, TaskGroupHandle, TaskHandle, },
+    ActionLink, LinkKind, DataFrameSize, TaskHandle, },
   worker::{WorkGroupRef, WorkGroup},},};
 
 use proto_sigil::{
@@ -70,15 +70,15 @@ fn must_work () {
     //println!("Greetings!\nWitness the swarm!");
     for _ in 0 .. Limit {
       let work_item =
-        ActionLink::make_link(LinkKind::Step, bump);
-      handle.assign_work(work_item);
+        ActionLink::goto(bump);
+      handle.assign_work_for_schedule(work_item);
     };
     fn checker(tf : TaskHandle) -> Option<ActionLink> {
       //println!("Condition checker pocked!");
       let ctx = tf.interpret_frame::<Ctx>();
       let count = ctx.counter.load(Ordering::Relaxed);
       if count == Limit {
-        return Some(ActionLink::make_link(LinkKind::Step, done));
+        return Some(ActionLink::goto( done));
       }
       return None;
     }
@@ -86,7 +86,7 @@ fn must_work () {
   }
 
   let init =
-    ActionLink::make_link(LinkKind::Step, begin);
+    ActionLink::goto(begin);
   let work_graph =
     ActionLink::make_frame_request(
       DataFrameSize::Bytes120, init);
@@ -142,7 +142,7 @@ fn children_see_parrents() {
     let done = frame.done.load(Ordering::Relaxed);
     if done {
       return Some(
-        ActionLink::make_link(LinkKind::Step, deleter)); }
+        ActionLink::goto( deleter)); }
     return None;
   }
   fn step1(mut tf : TaskHandle) -> ActionLink { unsafe {
@@ -150,16 +150,15 @@ fn children_see_parrents() {
     addr_of_mut!(frame.str).write(String::new());
     frame.str.push_str("I do exist!");
     frame.done = AtomicBool::new(false);
-    let p = ActionLink::make_link(
-      LinkKind::Step, step2);
+    let p = ActionLink::goto(step2);
     let p = ActionLink::make_frame_request(
         DataFrameSize::Bytes56, p);
-    tf.assign_work(p);
+    tf.assign_work_for_schedule(p);
     return ActionLink::make_progress_checker(checker);
   } }
 
   let ptr =
-    ActionLink::make_link(LinkKind::Step, step1);
+    ActionLink::goto( step1);
   let ptr = ActionLink::make_frame_request(
     DataFrameSize::Bytes56, ptr);
 
@@ -206,7 +205,7 @@ fn gateway_is_ok () {
     detached!([str] | tf:TaskHandle | {
       let frame = tf.interpret_frame::<Ctx>();
       unsafe { addr_of_mut!(frame.str).write(str) };
-      return ActionLink::make_link(LinkKind::Step, read);
+      return ActionLink::goto( read);
     });
     fn read(tf : TaskHandle) -> ActionLink {
       let frame = tf.interpret_frame::<Ctx>();
@@ -232,4 +231,11 @@ fn gateway_is_ok () {
 fn read_zst_from_null () {
   let inv : *mut () = null_mut();
   let () = unsafe { inv.read() };
+}
+
+#[test]
+fn count_ones () {
+  let num = !0u64;
+  let count = num.trailing_ones();
+  println!("{count}")
 }

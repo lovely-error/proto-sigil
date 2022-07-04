@@ -1,14 +1,26 @@
 
 use std::{mem::size_of};
 
-use proto_sigil::{trees::raw_syntax_nodes::{
-  AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr},
-  parser::parser::symbol::Symbol, elaborator::{worker::WorkQueue,
-    action_chain::Task}, support_structures::mini_vector::InlineVector};
+use proto_sigil::{
+  trees::raw_syntax_nodes::{
+    AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr, RawNode
+  },
+  parser::parser::symbol::Symbol,
+  elaborator::{
+    worker::WorkQueue,
+    action_chain::Task
+  },
+  support_structures::mini_vector::InlineVector
+};
 
 #[test]
 fn size_of_symbol_is_8_bytes () {
-  assert!(size_of::<Symbol>() == 8)
+  assert!(size_of::<Symbol>() == 16)
+}
+
+#[test]
+fn size_of_expr_ptr () {
+  assert!(size_of::<ExprPtr>() == 8)
 }
 
 #[test]
@@ -61,3 +73,11 @@ fn iv_size () {
 fn zero_types () {
   assert!(size_of::<(u64, ())>() == size_of::<u64>())
 }
+
+#[test]
+fn size_of_alternative_raw_node () {
+  println!("Size of RawNode is {} bytes", size_of::<RawNode>());
+  assert!(size_of::<RawNode>() <= 64);
+  println!("{}", size_of::<[u16;7]>());
+}
+

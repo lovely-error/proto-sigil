@@ -1,9 +1,13 @@
 
-use std::{intrinsics::transmute};
+use std::{intrinsics::transmute, marker::PhantomData};
 
 use crate::parser::{
   node_allocator::EntangledPtr, parser::{symbol::Symbol, SourceLocation}};
 
+pub trait Locatable {
+  type Location: Eq + Copy;
+  fn compute_location(&self) -> Self::Location;
+}
 
 #[repr(u8)] #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RawKind {
@@ -33,14 +37,14 @@ impl ExprPtr {
   pub fn init_counted_node(
     kind: RawKind, ptr: *mut (), arg_num:usize
   ) -> Self {
-    if arg_num > u8::MAX as usize { panic!("Too many args has been given") }
+    if arg_num > u8::MAX as usize { panic!("Too many args have been given") }
     let mut val = (ptr as u64) << 8;
     val += arg_num as u64;
     val = val << 8;
     val += kind as u64;
     return Self(val);
   }
-  pub fn project_tag(&self) -> RawKind {
+  pub fn project_presan_tag(&self) -> RawKind {
     let head = self.0 & 0x7F;
     return unsafe { transmute(head as u8) }
   }
@@ -51,7 +55,7 @@ impl ExprPtr {
            RawKind::App_ArgsInSlab |
            RawKind::Fun |
            RawKind::Wit |
-           RawKind::Sig = self.project_tag() {
+           RawKind::Sig = self.project_presan_tag() {
       return (self.0 >> 16) as *mut _ ;
     };
     return (self.0 >> 8) as *mut _ ;
@@ -201,6 +205,42 @@ impl DeclPtr {
     }
     return (self.0 >> 8) as *mut _
   }
+  pub fn deref_as_map(&self) -> Mapping {
+    let ptr = self.project_ptr();
+    let map = unsafe { *ptr.cast::<Mapping>() };
+    return map;
+  }
+  pub fn deref_as_defn(&self) -> Definition {
+    let ptr = self.project_ptr();
+    let defn = unsafe { *ptr.cast::<Definition>() };
+    return defn;
+  }
+}
+
+impl DeclPtr {
+  pub fn project_name(&self) -> Symbol { unsafe {
+    let ptr = self.project_ptr();
+    match self.project_tag() {
+      DeclKind::Definition => {
+        let defn = *ptr.cast::<Definition>();
+        return defn.name
+      },
+      DeclKind::Mapping => {
+        let map = *ptr.cast::<Mapping>();
+        return map.name;
+      },
+    }
+  } }
+  // pub fn project_location(&self) -> SourceLocation {
+  //   let ptr = self.project_ptr();
+  //   match self.project_tag() {
+  //     DeclKind::Definition => {
+  //       let defn = *ptr.cast::<Definition>();
+  //       return defn.;
+  //     },
+  //     DeclKind::Mapping => todo!(),
+  //   }
+  // }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -280,4 +320,25 @@ pub struct WitnessNodeIndirect {
   pub sloc_data: SourceLocation,
   pub seal: ExprPtr,
   pub items: EntangledPtr,
+}
+
+
+pub struct ArrayPtr<T>(u64, PhantomData<T>);
+
+pub enum RawNodeRepr {
+  Star,
+  Ref(Symbol),
+  App {
+    root: Symbol,
+    argsuments: ArrayPtr<()>,
+  },
+  Fun {
+    head: ArrayPtr<()>,
+    spine: *const RawNode,
+  },
+}
+pub struct RawNode {
+  pub kind: RawNodeRepr,
+  pub location: SourceLocation,
+  pub implicit_context: ()
 }

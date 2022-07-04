@@ -1,7 +1,10 @@
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of};
 use std::ptr::{null_mut};
-use crate::parser::parser::symbol::{Symbol, Repr};
+use std::str;
+use crate::parser::parser::symbol::{Symbol};
 use crate::{ throw, guard };
 use crate::support_structures::monad::{
   fail_with_aux_gen_ctx_intro};
@@ -10,8 +13,10 @@ use crate::parser::node_allocator::NodeSlabSizeInBytes;
 #[derive(Clone, Copy, Debug)]
 pub struct SourceLocation {
   pub primary_offset: u32,
-  pub secondary_offset: u32
+  pub secondary_offset: u16
 }
+
+#[derive(Debug, Clone, Copy)]
 pub struct TempSlocInfo {
   pub primary_offset: u32
 }
@@ -22,17 +27,16 @@ pub struct ParsingState<'chars> {
   pub byte_index: usize,
     // Todo: figure out how to expose fields to testing code
   line_number: u32,
-  node_allocator: Option<SlabAllocator<NodeSlabSizeInBytes>>,
-  slab_alloc_32: Option<SlabAllocator<32>>,
+  slab_alloc_64: Option<LinearAllocator<64>>,
   total_char_count: u32,
 }
 
 fn is_valid_char_for_symbol(char: u32) -> bool {
 
   if // Basic Latin small letterr
-     0x61 <= char && char <= 0x7A ||
+     (0x61 <= char && char <= 0x7A) ||
      // Basic Latin Capital Letters
-     0x41 <= char && char <= 0x5A ||
+     (0x41 <= char && char <= 0x5A) ||
      // _ symbol
      char == 0x5F { return true; }
   return false;
@@ -40,6 +44,7 @@ fn is_valid_char_for_symbol(char: u32) -> bool {
 
 const EOT : char = '\u{3}' ;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Checkpoint {
   old_char: u32,
   old_ptr: usize,
@@ -47,18 +52,25 @@ pub struct Checkpoint {
 }
 
 pub mod symbol {
-  #[derive(Debug, Copy, Clone)]
-  pub enum Repr {
-    Inlined([u8 ; 7]),
-    // [offset_from_start ; offset_from_head)
-    OffsetInfo {
-      offset_from_start: u32,
-      offset_from_head: u16
-    },
-  }
+  use std::{str::FromStr};
+
+  use super::SourceLocation;
+
   #[derive(Debug, Copy, Clone)]
   pub struct Symbol {
-    pub repr: Repr
+    pub hash: u64, pub sloc: SourceLocation,
+  }
+  impl Symbol {
+  pub fn normalise_name
+    (&self, chars: &[u8]) -> String {
+      let slice =
+        &chars[
+          self.sloc.primary_offset as usize ..
+          self.sloc.secondary_offset as usize];
+      let str =
+        std::str::from_utf8(slice).unwrap();
+      return String::from_str(str).unwrap();
+    }
   }
 }
 
@@ -85,8 +97,7 @@ impl<'v> ParsingState<'v> {
       bytes: char_ptr,
       current_char: unsafe { *char_ptr.get_unchecked(0) as u32 },
       line_number: 1,
-      node_allocator: None,
-      slab_alloc_32: None,
+      slab_alloc_64: None,
       total_char_count: 0
     }
   }
@@ -94,15 +105,25 @@ impl<'v> ParsingState<'v> {
 
 /// Accessors
 impl ParsingState<'_> {
-  fn get_slab(&mut self) -> *mut () {
-    if let None = self.node_allocator {
+  fn get_slab64(&mut self) -> *mut () {
+    if let None = self.slab_alloc_64 {
       //unlikely(true);
       let local_mem_man =
-        SlabAllocator::<NodeSlabSizeInBytes>::init();
-      self.node_allocator = Some(local_mem_man);
+        LinearAllocator::<64>::init();
+      self.slab_alloc_64 = Some(local_mem_man);
     }
-    if let Some(ref mut memman) = self.node_allocator {
+    if let Some(ref mut memman) = self.slab_alloc_64 {
       return memman.get_slot();
+    }
+    unreachable!()
+  }
+  fn get_mem(&mut self, byte_count: usize) -> *mut () {
+    if let None = self.slab_alloc_64 {
+      let fresh_mem_man = LinearAllocator::<64>::init();
+      self.slab_alloc_64 = Some(fresh_mem_man);
+    }
+    if let Some(ref mut mem_man) = self.slab_alloc_64 {
+      return mem_man.get_contiguos_mem(byte_count)
     }
     unreachable!()
   }
@@ -113,7 +134,7 @@ impl ParsingState<'_> {
   fn fail_with(&self, error: ParseErrorKind) -> ParseError {
     ParseError { absolute_offset: self.byte_index, kind: error }
   }
-  fn no_more_chars(&self) -> bool {
+  pub fn no_more_chars(&self) -> bool {
     self.byte_index == self.bytes.len()
   }
   fn next_char(&mut self) {
@@ -131,14 +152,14 @@ impl ParsingState<'_> {
     return unsafe {
       char::from_u32_unchecked(self.current_char) };
   }
-  fn make_position_snapshot(&self) -> Checkpoint {
+  fn checkpoint(&self) -> Checkpoint {
     Checkpoint {
       old_char: self.current_char,
       old_ptr: self.byte_index,
       old_ln_num: self.line_number
     }
   }
-  pub fn backtrack_state_to(
+  pub fn backtrack_to(
     &mut self,
     Checkpoint { old_char, old_ptr, old_ln_num }: Checkpoint
   ) {
@@ -169,7 +190,7 @@ impl ParsingState<'_> {
     })
   }
   pub fn probe_depth(&mut self) -> u32 {
-    let mut start = self.byte_index;
+    let mut start = 0;
     loop {
       self.skip_whitespaces();
       if self.get_current_char() == '\n' {
@@ -178,17 +199,18 @@ impl ParsingState<'_> {
         start = self.byte_index;
       } else { break };
     }
+    if start == 0 { return 0; }
     return (self.byte_index - start) as u32;
   }
   pub fn prefix_match(&mut self, pattern: &str, should_strip: bool) -> bool {
-    let chkpt = self.make_position_snapshot();
+    let chkpt = self.checkpoint();
     let mut iter = pattern.chars();
     loop {
       let item = iter.next();
       match item {
         Some(char) => {
           if self.get_current_char() != char {
-            self.backtrack_state_to(chkpt);
+            self.backtrack_to(chkpt);
             return false;
           }
           self.next_char();
@@ -197,24 +219,35 @@ impl ParsingState<'_> {
       }
     }
     if !should_strip {
-      self.backtrack_state_to(chkpt);
+      self.backtrack_to(chkpt);
     }
     return true;
   }
   pub fn at_terminator(&self) -> bool {
     let char = self.get_current_char();
-    return char == ':' || char == ')' ||
-           char == '|' || char == ',' ||
-           char == ']' || char == '}' ||
-           char == EOT || char == '=' ||
-           char == ';' ;
+    return !is_valid_char_for_symbol(char as u32);
   }
   pub fn begin_sloc(&self) -> TempSlocInfo {
     TempSlocInfo { primary_offset: self.byte_index as u32 }
   }
-  pub fn end_sloc(&self, initial_loc: &TempSlocInfo) -> SourceLocation {
+  pub fn end_sloc(&self, initial_loc: TempSlocInfo) -> SourceLocation {
     SourceLocation { primary_offset: initial_loc.primary_offset,
-                     secondary_offset: self.byte_index as u32 }
+                     secondary_offset: self.byte_index as u16 }
+  }
+  pub fn accept_first_parse
+  <const N : usize, T>(&mut self, opts: [impl FnOnce(&mut Self) -> Maybe<T> ; N])
+  -> Maybe<T> {
+    let chkpt = self.checkpoint();
+    for i in opts.into_iter() {
+      let smth = i(self);
+      match smth {
+        Ok(val) => return Ok(val),
+        Err(_) => self.backtrack_to(chkpt),
+      }
+    };
+    throw! {
+      self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    }
   }
 }
 
@@ -222,6 +255,7 @@ impl ParsingState<'_> {
 /// Symbol parsing
 impl ParsingState<'_> {
   pub fn parse_symbol(&mut self) -> Maybe<symbol::Symbol> {
+    let sloc_begin = self.begin_sloc();
     let symbol_start = self.byte_index;
     self.skip_while(|self_|{
       let char = self_.current_char;
@@ -229,28 +263,15 @@ impl ParsingState<'_> {
     });
     let symbol_end = self.byte_index;
     let diff = symbol_end - symbol_start;
+    let sloc = self.end_sloc(sloc_begin);
     if diff == 0 {
       throw!(self.fail_with(ParseErrorKind::EmptySymbol));
     };
-    if diff <= 7 {
-      let mut ptr = 0usize;
-      let chars: [u8;7] = [0;7];
-      let chars_ptr = chars.as_ptr() as usize;
-      loop { unsafe {
-        *((chars_ptr + ptr) as *mut u8) =
-          *self.bytes.get_unchecked(symbol_start + ptr);
-        ptr += 1;
-        if ptr == diff { break }
-      } }
-      return Ok(Symbol { repr: Repr::Inlined(chars) });
-    };
-    if diff >= u16::MAX as usize {
-      throw!(self.fail_with(ParseErrorKind::TooLongSymbol));
-    };
-    return Ok(Symbol { repr:
-      Repr::OffsetInfo {
-        offset_from_start: symbol_start as u32,
-        offset_from_head: diff as u16 } });
+    let mut hasher = DefaultHasher::new();
+    let str = &self.bytes[symbol_start .. symbol_end];
+    str.hash(&mut hasher);
+    let hash = hasher.finish();
+    return Ok(Symbol { hash, sloc });
   }
 }
 
@@ -262,7 +283,7 @@ use crate::trees::raw_syntax_nodes::{
   CompoundPatternNode_ArgsIndiSlab, RewriteRule, Definition, DeclPtr, Mapping,
   LiftNodeItem, LiftNode, RawCtxPtr, WitnessNodeIndirect};
 use crate::support_structures::mini_vector::InlineVector;
-use super::node_allocator::{SlabAllocator, EntangledPtr};
+use super::node_allocator::{LinearAllocator, EntangledPtr};
 
 
 // Raw Expr parsing
@@ -290,8 +311,23 @@ impl ParsingState<'_> {
       ctx
     } else { RawCtxPtr::init_null() };
     if self.prefix_match("(", false) {
-      let lift = self.parse_lift_node(imp_ctx)?;
-      return Ok(lift);
+      let chk = self.checkpoint();
+      let lift = self.parse_lift_node(imp_ctx);
+      match lift {
+        Ok(lift) => return Ok(lift),
+        Err(_) => {
+          self.backtrack_to(chk);
+          self.next_char();
+          let depth = self.probe_depth().max(root_indentation_depth);
+          let expr =
+            self.parse_expr(depth)?;
+          guard! {
+            self.prefix_match(")", true) =>
+            self.fail_with(ParseErrorKind::UnterminatedSubexpr)
+          };
+          return Ok(expr);
+        },
+      }
     }
     let loc = self.begin_sloc();
     let root = self.parse_symbol()?;
@@ -299,34 +335,35 @@ impl ParsingState<'_> {
       InlineVector::<4, ExprPtr>::init();
     loop {
       self.skip_whitespaces();
-      if self.prefix_match("\n", true) {
+      if self.prefix_match("\n", false) {
         let depth = self.probe_depth();
         if depth <= root_indentation_depth {
           self.byte_index -= depth as usize; break };
       }
-      if self.at_terminator() { break; }
       if self.prefix_match("(", true) {
         self.skip_trivia();
         let subexpr =
           self.parse_expr(root_indentation_depth)?;
         subexprs.append(subexpr);
-        self.skip_trivia();
-        guard!(
-          self.prefix_match(")", true)
-          => self.fail_with(ParseErrorKind::UnterminatedSubexpr));
+        guard! {
+          self.prefix_match(")", true) =>
+            self.fail_with(ParseErrorKind::UnterminatedSubexpr)
+        }
         continue;
       }
+      if self.at_terminator() { break; }
+
       let terminal_subexpr = self.parse_symbol()?;
-      let mem_ptr = self.get_slab();
+      let mem_ptr = self.get_slab64();
       let data = &mut *mem_ptr.cast::<RefNode>();
       data.name = terminal_subexpr;
       data.ctx_ptr = RawCtxPtr::init_null();
       let expr_ptr = ExprPtr::init(RawKind::Ref, mem_ptr);
       subexprs.append(expr_ptr);
     };
-    let loc = self.end_sloc(&loc);
+    let loc = self.end_sloc(loc);
     let this_node_ptr =
-      self.get_slab();
+      self.get_slab64();
     if subexprs.is_empty() {
       let node_ptr = &mut *this_node_ptr.cast::<RefNode>();
       node_ptr.name = root;
@@ -347,7 +384,7 @@ impl ParsingState<'_> {
       return Ok(expr_ptr);
     };
     if count <= (NodeSlabSizeInBytes / size_of::<ExprPtr>()) as u32 {
-      let invocation_data = self.get_slab();
+      let invocation_data = self.get_slab64();
       subexprs.move_content_into(invocation_data.cast());
       let ptr_to_arg_ptrs = EntangledPtr::from_ptr_pair(
         this_node_ptr, invocation_data)
@@ -392,22 +429,20 @@ impl ParsingState<'_> {
         }
       }
     }
-    let count = items.count_items();
-    if count as usize
-      <= NodeSlabSizeInBytes / size_of::<(Symbol, ExprPtr)>() {
-        let slab = self.get_slab();
-        items.move_content_into(slab.cast());
-        let ptr = RawCtxPtr::init(
-          count as u8, slab);
-        return Ok(ptr)
-    }
-    todo!()
+    let count = items.count_items() as usize;
+    let stor_cap_req = size_of::<(Symbol, ExprPtr)>() * count;
+    let mem = self.get_mem(stor_cap_req);
+    items.move_content_into(mem.cast());
+    let ctx_ptr = RawCtxPtr::init(count as u8, mem);
+    return Ok(ctx_ptr)
+
   }
   pub fn parse_witness(&mut self) -> Maybe<ExprPtr> {
     let loc = self.begin_sloc();
     guard! {
       self.prefix_match("[|", true) =>
-      self.fail_with(ParseErrorKind::UnexpectedCharacter) };
+      self.fail_with(ParseErrorKind::UnexpectedCharacter)
+    };
     let mut items =
       InlineVector::<4, ExprPtr>::init();
     loop {
@@ -427,18 +462,19 @@ impl ParsingState<'_> {
     guard! {
       self.prefix_match("|]", true) =>
       self.fail_with(ParseErrorKind::UnexpectedCharacter) };
-    let loc = self.end_sloc(&loc);
-    let this_node = self.get_slab();
+    let loc = self.end_sloc(loc);
+    let this_node = self.get_slab64();
     let count = items.count_items();
     if count as usize <= NodeSlabSizeInBytes / size_of::<ExprPtr>() {
-      let item_storage = self.get_slab();
+      let item_storage = self.get_slab64();
       items.move_content_into(item_storage.cast());
       let ptr =
         EntangledPtr::from_ptr_pair(
           this_node.cast(), item_storage.cast())
           .unwrap();
       let mut data = unsafe {
-        &mut *this_node.cast::<WitnessNodeIndirect>() };
+        &mut *this_node.cast::<WitnessNodeIndirect>()
+      };
       data.seal = focus;
       data.sloc_data = loc;
       data.items = ptr;
@@ -463,12 +499,12 @@ impl ParsingState<'_> {
       InlineVector::<4, LiftNodeItem>::init();
     loop {
       let indent = self.probe_depth();
-      let chkpt = self.make_position_snapshot();
+      let chkpt = self.checkpoint();
       let maybe_expr =
         self.parse_expr(indent)?;
       self.skip_trivia();
       if self.prefix_match(":", true) {
-        self.backtrack_state_to(chkpt);
+        self.backtrack_to(chkpt);
         let ref_ = self.parse_symbol()?;
         self.skip_trivia();
         let _ = self.prefix_match(":", true);
@@ -501,11 +537,11 @@ impl ParsingState<'_> {
     let spine = self.parse_expr(depth)?;
 
     let count = items.count_items();
-    let slab = self.get_slab();
+    let slab = self.get_slab64();
     if count as usize <=
     NodeSlabSizeInBytes / size_of::<LiftNodeItem>() { unsafe {
       items.move_content_into(slab.cast());
-      let node_ptr = self.get_slab();
+      let node_ptr = self.get_slab64();
       let data = &mut *node_ptr.cast::<LiftNode>();
       data.head = EntangledPtr::from_ptr_pair(
         node_ptr, slab).unwrap();
@@ -533,7 +569,7 @@ impl ParsingState<'_> {
         => self.fail_with(ParseErrorKind::UnexpectedCharacter)
     };
     let mut depth = self.probe_depth();
-    let slab = self.get_slab();
+    let slab = self.get_slab64();
     let mut clauses =
       InlineVector::<4, EntangledPtr>::init();
     loop {
@@ -547,7 +583,7 @@ impl ParsingState<'_> {
     }
     let count = clauses.count_items();
     if count as usize <= NodeSlabSizeInBytes / size_of::<EntangledPtr>() {
-      let arg_slab = self.get_slab();
+      let arg_slab = self.get_slab64();
       clauses.move_content_into(arg_slab.cast());
       let node_ptr =
         ExprPtr::init_counted_node(
@@ -579,15 +615,14 @@ impl ParsingState<'_> {
     }
     let depth = self.probe_depth();
     let stencil = self.parse_expr(
-      if depth == 0 { indentation_depth }
-                              else { depth } )?;
+      if depth == 0 { indentation_depth } else { depth } )?;
 
     let count = patterns.count_items();
-    let pats = self.get_slab();
+    let pats = self.get_slab64();
     patterns.move_content_into(pats.cast());
 
     if count as usize <= NodeSlabSizeInBytes / size_of::<PatternExprPtr>() {
-      let slab = self.get_slab();
+      let slab = self.get_slab64();
       let data = &mut *slab.cast::<RewriteRule>();
       data.pattern_count = count as u16;
       data.patterns = EntangledPtr::from_ptr_pair(
@@ -607,7 +642,6 @@ impl ParsingState<'_> {
       InlineVector::<4, PatternExprPtr>::init();
     loop {
       self.skip_trivia();
-      if self.at_terminator() { break; }
       if self.prefix_match("(", true) {
         self.skip_trivia();
         let sub_pat = self.parse_pattern()?;
@@ -619,14 +653,16 @@ impl ParsingState<'_> {
         }
         continue;
       }
+      if self.at_terminator() { break; }
+
       let terminal_pat = self.parse_symbol()?;
-      let slab = self.get_slab();
+      let slab = self.get_slab64();
       let node = &mut *slab.cast::<RefPatternNode>();
       node.name = terminal_pat;
       let expr = PatternExprPtr::init_singular(slab);
       args.append(expr);
     }
-    let slab = self.get_slab();
+    let slab = self.get_slab64();
     if args.is_empty() {
       let data =
         &mut *slab.cast::<RefPatternNode>();
@@ -646,7 +682,7 @@ impl ParsingState<'_> {
       return Ok(comp);
     }
     if count <= (NodeSlabSizeInBytes / size_of::<PatternExprPtr>()) as u32 {
-      let indi_args = self.get_slab();
+      let indi_args = self.get_slab64();
       args.move_content_into(indi_args.cast());
       let data =
         &mut *slab.cast::<CompoundPatternNode_ArgsIndiSlab>();
@@ -679,7 +715,7 @@ impl ParsingState<'_> {
       depth = self.probe_depth();
       let value = self.parse_expr(depth)?;
       unsafe {
-        let slab = self.get_slab();
+        let slab = self.get_slab64();
         let data =
           &mut *slab.cast::<Definition>();
         data.name = name;
@@ -703,7 +739,7 @@ impl ParsingState<'_> {
       let count = clauses.count_items();
       if count as usize <=
       NodeSlabSizeInBytes / size_of::<EntangledPtr>() { unsafe {
-        let slab = self.get_slab();
+        let slab = self.get_slab64();
         let slab_ = slab.cast::<EntangledPtr>();
         for i in 0 .. count {
           let rr_ptr = clauses.get_ref(i);
@@ -712,7 +748,7 @@ impl ParsingState<'_> {
               slab, (*rr_ptr).cast()).unwrap();
           *slab_.add(i as usize) = entp;
         }
-        let map_decl_ptr = self.get_slab();
+        let map_decl_ptr = self.get_slab64();
         let data = &mut *map_decl_ptr.cast::<Mapping>();
         data.name = name;
         data.type_ = type_;

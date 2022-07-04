@@ -6,6 +6,6 @@
   "editor.wordWrapColumn": 80,
   "lldb.dereferencePointers": true,
   "lldb.consoleMode": "commands",
-  "lldb.displayFormat": "hex",
   "lldb.showDisassembly": "auto",
+  "lldb.displayFormat": "auto",
 }

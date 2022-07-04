@@ -1,44 +1,15 @@
 use proto_sigil::{parser::{
   parser::{
-    ParsingState, symbol::{Symbol, Repr}}},
+    ParsingState,}},
   trees::{raw_syntax_nodes::{
-    RefNode,  RawKind, Mapping, RawCtxPtr},
+    RefNode,  Mapping, RawCtxPtr},
     naive_textual_rendering::{render_expr_tree, render_pattern}}};
 
 extern crate proto_sigil;
 
 
 
-#[test]
-fn recognisible_long() {
-  let example_text = "aaaaaaaa";
-  let mut ps =
-    ParsingState::init(
-      example_text.as_bytes());
-  let smth = ps.parse_symbol();
-  //println!("{:#?}", smth);
-  match smth {
-    Result::Ok(Symbol { repr:
-      Repr::OffsetInfo {
-        offset_from_start: 0, offset_from_head: 8 } }) => (),
-    _ => panic!("Expected a big symbol, but found something else")
-  }
-}
 
-#[test]
-fn recognisible_short () {
-  let example_text = "aaaaaaa";
-  let mut ps =
-    ParsingState::init(
-      example_text.as_bytes());
-  let smth = ps.parse_symbol();
-  //println!("{:#?}", smth);
-  match smth {
-    Result::Ok(Symbol { repr:
-      Repr::Inlined([0x61,0x61,0x61,0x61,0x61,0x61,0x61]) }) => (),
-    _ => panic!("Expected small symbol of all 'a's, but found something else")
-  }
-}
 
 #[test]
 fn prefix_check_works() {
@@ -96,13 +67,12 @@ fn basic_expr() {
   match app_expr {
     Ok(expr_ptr) => {
       let mut thing = String::new();
-      render_expr_tree(expr_ptr, &mut thing);
+      render_expr_tree(expr_ptr, &mut thing, example_text);
       //println!("{}", thing);
       assert!(thing == "(A [(B [C]), D, (E [F, G])])");
     },
     Err(err) => {
-      println!("{:#?}", err);
-      panic!("Unexpected failure");
+      panic!("{:#?}", err);
     },
   }
 }
@@ -116,7 +86,7 @@ fn basic_pattern_expr() {
   let pattern =
     ps.parse_pattern().unwrap();
   let mut str = String::new();
-  render_pattern(pattern, &mut str);
+  render_pattern(pattern, &mut str, example_text);
   println!("{}", str);
 }
 
@@ -175,7 +145,7 @@ fn map_parsing () {
   let val = unsafe { &*def.project_ptr().cast::<Mapping>() };
   println!("{:#?}", val);
   let mut thing = String::new();
-  render_expr_tree(val.type_, &mut thing);
+  render_expr_tree(val.type_, &mut thing, &example_text);
   println!("{:#?}", thing);
 }
 
@@ -191,10 +161,11 @@ fn fun_parsing () {
   match smth {
     Ok(val) => {
       let mut str = String::new();
-      render_expr_tree(val, &mut str);
+      render_expr_tree(val, &mut str, example_text);
       println!("{}", str);
+      assert!(str == "(a : T, (K [a, a])) -> ((b : D) -> ((M [a, b])))")
     },
-    Err(oops) => println!("{:#?}", oops),
+    Err(oops) => panic!("{:#?}", oops),
   }
 }
 
@@ -206,13 +177,13 @@ fn some_realistic_def() {
   let mut ps =
     ParsingState::init(
       example_text.as_bytes());
-  let smth = ps.run_parsing();
+  let smth = ps.parse_decl();
   match smth {
     Ok(val) => {
       println!("{:#?}", val);
     },
     Err(err) => {
-      println!("{:#?}", err);
+      panic!("{:#?}", err);
     }
   }
 }
@@ -220,7 +191,7 @@ fn some_realistic_def() {
 #[test]
 fn implicits_are_parseable () {
   let example_text =
-    "{A, B, C : Hui ta} (a : A) -> B" ;
+    "{A, B, C : M n} (a : A) -> B" ;
   let mut ps =
     ParsingState::init(
       example_text.as_bytes());
@@ -229,11 +200,12 @@ fn implicits_are_parseable () {
   match smth {
     Ok(val) => {
       let mut str = String::new();
-      render_expr_tree(val, &mut str);
+      render_expr_tree(val, &mut str, example_text);
       println!("{}", str);
+      assert!(str == "{A, B, C : (M [n])} (a : A) -> (B)")
     },
     Err(err) => {
-      println!("{:#?}", err);
+      panic!("{:#?}", err);
     }
   }
 }
@@ -250,11 +222,12 @@ fn witness_is_parseable () {
   match smth {
     Ok(val) => {
       let mut str = String::new();
-      render_expr_tree(val, &mut str);
+      render_expr_tree(val, &mut str, example_text);
       println!("{}", str);
+      assert!(str == "[| (a [b]), (b [c]) ; (c [d, (e [f])]) |]")
     },
     Err(err) => {
-      println!("{:#?}", err);
+      panic!("{:#?}", err);
     }
   }
 }
@@ -271,11 +244,34 @@ fn ref_node_with_ctx_is_parseable () {
   match smth {
     Ok(val) => {
       let mut str = String::new();
-      render_expr_tree(val, &mut str);
+      render_expr_tree(val, &mut str, example_text);
       println!("{}", str);
+      assert!(str == "{A} A")
     },
     Err(err) => {
-      println!("{:#?}", err);
+      panic!("{:#?}", err);
+    }
+  }
+}
+
+#[test]
+fn nested_parens() {
+  let example_text =
+    "(((a : A) -> T a))" ;
+  let mut ps =
+    ParsingState::init(
+      example_text.as_bytes());
+  let smth =
+    ps.parse_expr(0);
+  match smth {
+    Ok(val) => {
+      let mut str = String::new();
+      render_expr_tree(val, &mut str, example_text);
+      println!("{:#?}", str);
+      assert!(str == "(a : A) -> ((T [a]))")
+    },
+    Err(err) => {
+      panic!("{:#?}", err);
     }
   }
 }

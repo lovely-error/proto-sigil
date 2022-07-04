@@ -2,7 +2,7 @@ use std::{
   time::{SystemTime,}, collections::HashMap,
   thread::{spawn}, ptr::addr_of, sync::Mutex};
 
-use proto_sigil::elaborator::environment::PasteboardTable;
+use proto_sigil::{elaborator::environment::{PasteboardTable, DefaultTableStreamingIterator}, foreach};
 
 
 #[test]
@@ -305,4 +305,55 @@ fn compression_benefits_assessment () {
   }
   let time = start.elapsed().unwrap().as_millis();
   println!("Lookup when frozen took {time} ms");
+}
+
+
+#[test]
+fn streaming_table() {
+  let limit = 100;
+
+  let table =
+    PasteboardTable::<u64, u64>::init();
+
+  for i in 0 .. limit {
+    table.insert(&i, i);
+  }
+
+
+  let iter =
+    DefaultTableStreamingIterator::init(&table);
+
+  let mut vec = Vec::new();
+  for i in iter {
+    vec.push(i)
+  }
+  vec.sort();
+  for i in 0 .. limit {
+    assert!(vec.get(i as usize).unwrap() == &i)
+  }
+}
+
+#[test]
+fn shugared_streaming_table() {
+  let limit = 10;
+
+  let table =
+    PasteboardTable::<u64, u64>::init();
+
+  for i in 0 .. limit {
+    table.insert(&i, i);
+  }
+
+  let mut iter =
+    DefaultTableStreamingIterator::init(&table);
+
+  let mut vec = Vec::new();
+
+  foreach! { i in &mut iter => vec.push(i as u64) };
+
+  vec.sort();
+
+  for i in 0 .. limit {
+    assert!(vec.get(i as usize).unwrap() == &i)
+  }
 }

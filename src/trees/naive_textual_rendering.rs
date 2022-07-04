@@ -1,27 +1,26 @@
 
 use crate::parser::{
-  parser::symbol::{Repr, Symbol}};
+  parser::symbol::{Symbol}};
 use super::raw_syntax_nodes::{
   RawKind, RefNode, AppNodeIndirectSmall, ExprPtr, AppNodeArgsInline,
   PatternExprPtr, PatternKind, CompoundPatternNode_ArgsInline,
   RefPatternNode, LiftNode, LiftNodeItem, RawCtxPtr, WitnessNodeIndirect};
 
 
-pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
-  let kind = expr.project_tag();
+pub fn render_expr_tree(expr: ExprPtr, output: &mut String, str: &str) { unsafe {
+  let kind = expr.project_presan_tag();
   let ptr = expr.project_ptr();
   match kind {
     RawKind::Ref => {
       let ref_node = *ptr.cast::<RefNode>();
-      write_implicit_context_if_present(ref_node.ctx_ptr, output);
-      output.push(' ');
-      write_symbol(&ref_node.name, output);
+      write_implicit_context_if_present(ref_node.ctx_ptr, output, str);
+      write_symbol(&ref_node.name, output, str);
     },
     RawKind::App_ArgsInSlab => {
       let app_node = *ptr.cast::<AppNodeIndirectSmall>();
-      write_implicit_context_if_present(app_node.ctx_ptr, output);
+      write_implicit_context_if_present(app_node.ctx_ptr, output, str);
       output.push('(');
-      write_symbol(&app_node.name, output);
+      write_symbol(&app_node.name, output, str);
       output.push_str(" [");
       let count = expr.project_count();
       let args =
@@ -29,7 +28,7 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
       let limit = count - 1;
       for i in 0 .. count {
         let arg = args.add(i as usize);
-        render_expr_tree(*arg, output);
+        render_expr_tree(*arg, output, str);
         if i != limit {
           output.push_str(", ");
         }
@@ -38,16 +37,16 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
     },
     RawKind::App_ArgsInline => {
       let app_node = *ptr.cast::<AppNodeArgsInline>();
-      write_implicit_context_if_present(app_node.ctx_ptr, output);
+      write_implicit_context_if_present(app_node.ctx_ptr, output, str);
       output.push('(');
-      write_symbol(&app_node.name, output);
+      write_symbol(&app_node.name, output, str);
       output.push_str(" [");
       let count = expr.project_count();
       let args = &app_node.args;
       let limit = count - 1;
       for i in 0 .. count {
         let arg = args.get_unchecked(i as usize);
-        render_expr_tree(*arg, output);
+        render_expr_tree(*arg, output, str);
         if i != limit {
           output.push_str(", ");
         }
@@ -71,16 +70,16 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
         data.items.reach_referent_from(ptr).cast::<ExprPtr>();
       for i in 0 .. count {
         let arg = *args.add(i as usize);
-        render_expr_tree(arg, output);
+        render_expr_tree(arg, output, str);
         if i != limit { output.push_str(", ") }
       }
       output.push_str(" ; ");
-      render_expr_tree(data.seal, output);
+      render_expr_tree(data.seal, output, str);
       output.push_str(" |]");
     },
     RawKind::Fun => {
       let node = &*ptr.cast::<LiftNode>();
-      write_implicit_context_if_present(node.ctx_ptr, output);
+      write_implicit_context_if_present(node.ctx_ptr, output, str);
       output.push('(');
       let count = expr.project_count();
       let items =
@@ -89,20 +88,20 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
       for i in 0 .. count {
         let item = &*items.add(i as usize);
         if let Some(ref name) = item.name {
-          write_symbol(name, output);
+          write_symbol(name, output, str);
           output.push_str(" : ");
         }
-        render_expr_tree(item.val, output);
+        render_expr_tree(item.val, output, str);
         if i != limit { output.push_str(", ")};
       }
       output.push_str(") -> ");
       output.push('(');
-      render_expr_tree(node.spine_expr, output);
+      render_expr_tree(node.spine_expr, output, str);
       output.push(')');
     },
     RawKind::Sig => {
       let node = &*ptr.cast::<LiftNode>();
-      write_implicit_context_if_present(node.ctx_ptr, output);
+      write_implicit_context_if_present(node.ctx_ptr, output, str);
       output.push('(');
       let count = expr.project_count();
       let items =
@@ -111,15 +110,15 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
       for i in 0 .. count {
         let item = &*items.add(i as usize);
         if let Some(ref name) = item.name {
-          write_symbol(name, output);
+          write_symbol(name, output, str);
           output.push_str(" : ");
         }
-        render_expr_tree(item.val, output);
+        render_expr_tree(item.val, output, str);
         if i != limit { output.push_str(", ")};
       }
       output.push_str(") |- ");
       output.push('(');
-      render_expr_tree(node.spine_expr, output);
+      render_expr_tree(node.spine_expr, output, str);
       output.push(')');
     },
     RawKind::Star => {
@@ -128,28 +127,16 @@ pub fn render_expr_tree(expr: ExprPtr, output: &mut String) { unsafe {
   }
 } }
 
-fn write_symbol(symbol: &Symbol, output: &mut String) {
-  match symbol.repr {
-    Repr::Inlined(smth) => {
-      for char in smth.iter() {
-        let char = *char;
-        if char == 0 { break; }
-        let char = unsafe {
-          char::from_u32_unchecked(char as u32) };
-        output.push(char);
-      }
-    },
-    Repr::OffsetInfo {
-      offset_from_start,
-      offset_from_head
-    } => {
-      todo!()
-    },
-  }
+fn write_symbol(symbol: &Symbol, output: &mut String, str: &str) {
+  let range =
+    symbol.sloc.primary_offset as usize ..
+    symbol.sloc.secondary_offset as usize;
+  let str = &str[range];
+  output.push_str(str);
 }
 
 pub fn render_pattern(
-  node_ptr: PatternExprPtr, output: &mut String
+  node_ptr: PatternExprPtr, output: &mut String, str: &str
 ) { unsafe {
   let kind = node_ptr.project_tag();
   let ptr = node_ptr.project_ptr();
@@ -161,13 +148,13 @@ pub fn render_pattern(
       output.push('(');
       let node =
         *ptr.cast::<CompoundPatternNode_ArgsInline>();
-      write_symbol(&node.name, output);
+      write_symbol(&node.name, output, str);
       output.push_str(" [");
       let count = node_ptr.project_count();
       let limit = count - 1;
       for i in 0 .. count {
         let arg = node.args.get_unchecked(i as usize);
-        render_pattern(*arg, output);
+        render_pattern(*arg, output, str);
         if i != limit {
           output.push(' ');
         }
@@ -178,12 +165,13 @@ pub fn render_pattern(
     PatternKind::Compound_Huge => todo!(),
     PatternKind::Singular => {
       let node = *ptr.cast::<RefPatternNode>();
-      write_symbol(&node.name, output);
+      write_symbol(&node.name, output, str);
     },
   }
 } }
 
-fn write_implicit_context_if_present(ctx: RawCtxPtr, output: &mut String) {
+fn write_implicit_context_if_present(
+  ctx: RawCtxPtr, output: &mut String, str: &str) {
   if ctx.is_null() { return; }
   let ptr =
     ctx.project_ptr().cast::<(Symbol, ExprPtr)>();
@@ -193,12 +181,12 @@ fn write_implicit_context_if_present(ctx: RawCtxPtr, output: &mut String) {
   for i in 0 .. count {
     let (symbol, expr) =
       unsafe { *ptr.add(i as usize) };
-    write_symbol(&symbol, output);
+    write_symbol(&symbol, output, str);
     if !expr.is_null() {
       output.push_str(" : ");
-      render_expr_tree(expr, output);
+      render_expr_tree(expr, output, str);
     }
     if i != limit { output.push_str(", ") }
   }
-  output.push('}');
+  output.push_str("} ");
 }

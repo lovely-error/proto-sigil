@@ -1,9 +1,12 @@
 
-use std::{intrinsics::transmute, mem::{size_of, }, };
+use std::{intrinsics::transmute, mem::{size_of, forget, }, };
 
-use crate::{support_structures::{mini_vector::SomeInlineVector, no_bullshit_closure::SomeSendableClosure}, };
+use crate::{
+  support_structures::{mini_vector::SomeInlineVector,
+    no_bullshit_closure::SomeSendableClosure}, };
 
-use super::frame_allocator::{MemorySlabControlItem, SlabSize};
+use super::frame_allocator::{
+  MemorySlabControlItem, SlabSize, GranularSlabAllocator, RCTaskBox};
 
 
 
@@ -11,29 +14,21 @@ use super::frame_allocator::{MemorySlabControlItem, SlabSize};
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum LinkKind {
   Step, Completion, FrameRequest,
-  ProgressCheck, Gateway
+  ProgressCheck, Gateway, TaskLocalClosure
 }
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum DataFrameSize {
   Absent, Bytes120, Bytes248, Bytes504, Bytes56
 }
 
-pub struct TaskGroupHandle<'i>(
-  pub(super) &'i mut dyn SomeInlineVector<Item = Task>, pub(super) MemorySlabControlItem);
-impl TaskGroupHandle<'_> {
-  pub fn assign_work(&mut self, item: ActionLink) {
-    let task =
-      Task::init(self.1, item);
-    self.0.push(task);
-  }
-}
 
 pub struct TaskHandle(
   pub(super) *mut dyn SomeInlineVector<Item = Task>,
-  pub(super) MemorySlabControlItem);
+  pub(super) MemorySlabControlItem,
+  pub(super) *mut GranularSlabAllocator);
 
 impl TaskHandle {
-  pub fn assign_work(&mut self, item: ActionLink) {
+  pub fn assign_work_for_schedule(&self, item: ActionLink) {
     let task =
       Task::init(self.1, item);
     unsafe { (&mut *self.0).push(task) };
@@ -64,9 +59,35 @@ impl TaskHandle {
         self.1.project_slab_ptr().cast::<u8>().add(offset);
       let frame = *ptr.cast::<MemorySlabControlItem>();
       if frame.is_null() { return None }
-      return Some(Self(self.0, frame));
+      return Some(Self(self.0, frame, self.2));
     }
   }
+  pub(super) fn request_slab(&self, slab_size: SlabSize)
+  -> MemorySlabControlItem {
+    unsafe { (&mut *self.2).acquire_memory(slab_size) }
+  }
+  pub fn spawn_box<T>(&self, value: T) -> RCTaskBox<T> { unsafe {
+    let size = match size_of::<(MemorySlabControlItem, T)>() {
+      0 ..= 65 => SlabSize::Bytes64,
+      0 ..= 129 => SlabSize::Bytes128,
+      0 ..= 257 => SlabSize::Bytes256,
+      0 ..= 513 => SlabSize::Bytes512,
+      _ => panic!("Value is too big to fit into task local box")
+    };
+    let mem = self.request_slab(size);
+    let ptr =
+      mem.project_slab_ptr().cast::<(u64, MemorySlabControlItem, T)>();
+    ptr.write((0, mem, value));
+    return RCTaskBox { storage_ptr: ptr }
+  } }
+  pub fn recycle_box<T>(&self, task_box: RCTaskBox<T>) { unsafe {
+    let (rc, mci, val) =
+      task_box.storage_ptr.read();
+    if rc != 0 { panic!("Attempt to recycle a box which is referenced somewhere!") }
+    drop(val);
+    forget(task_box);
+    (&mut *self.2).release_memory(mci)
+  } }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -107,12 +128,6 @@ impl ActionLink {
     return Self(((
       should_delete_frame as u64) << 4) + LinkKind::Completion as u64);
   }
-  pub fn make_link(
-    kind: LinkKind,
-    fun_ptr: fn (TaskHandle) -> ActionLink
-  ) -> Self {
-    unsafe { Self((transmute::<_, u64>(fun_ptr) << 4) + kind as u64) }
-  }
   pub fn goto(fun_ptr: fn (TaskHandle) -> ActionLink) -> Self {
     unsafe {
       Self((transmute::<_, u64>(fun_ptr) << 4) + LinkKind::Step as u64) }
@@ -123,6 +138,28 @@ impl ActionLink {
     unsafe {
       Self((transmute::<_, u64>(cheker_ptr) << 4)
         + LinkKind::ProgressCheck as u64) }
+  }
+  pub fn make_task_local_closure<T>(
+    handle: &TaskHandle, env: T, fun: fn (*mut T, TaskHandle) -> ActionLink
+  ) -> ActionLink {
+    //type CellContent = (MemorySlabControlItem, T, );
+    let slab_size = match size_of::<(MemorySlabControlItem, *mut (), T)>() {
+      0 ..= 65 => SlabSize::Bytes64,
+      0 ..= 129 => SlabSize::Bytes128,
+      0 ..= 257 => SlabSize::Bytes256,
+      0 ..= 513 => SlabSize::Bytes512,
+      _ => panic!("Too big size of environment")
+    };
+    let mem = handle.request_slab(slab_size);
+    let ptr = mem.project_slab_ptr();
+    let ptr_ = ptr.cast::<(MemorySlabControlItem, *mut (), T)>();
+    unsafe { ptr_.write((mem, fun as *mut (), env)) };
+
+    let num = ((ptr as u64) << 4) + LinkKind::TaskLocalClosure as u64;
+    return ActionLink(num);
+  }
+  pub fn project_closure_ptr(&self) -> *mut () {
+    (self.0 >> 4) as *mut ()
   }
   pub fn project_deletion_flag(&self) -> bool {
     (self.0 >> 4) == 1
@@ -180,3 +217,4 @@ impl Task {
     return if let LinkKind::Completion = kind { true } else { false }
   }
 }
+

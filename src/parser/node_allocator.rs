@@ -1,13 +1,11 @@
 
-use std::{alloc::{Layout, alloc, dealloc}, mem::size_of};
+use std::{alloc::{Layout, alloc, dealloc}, mem::size_of, panic};
 
 
 const Page4K : Layout = unsafe {
   Layout::from_size_align_unchecked(4096, 1) } ;
 
 pub const NodeSlabSizeInBytes : usize = 64;
-
-const NodePageCapacity : u16 = 4096 / NodeSlabSizeInBytes as u16 ;
 
 
 #[derive(Debug, Copy, Clone)]
@@ -37,27 +35,30 @@ impl EntangledPtr {
 }
 
 #[derive(Debug)]
-pub struct SlabAllocator<const item_size : usize> {
+pub struct LinearAllocator<const item_size : usize> {
   pub first_page: *mut (),
-  pub last_page: *mut (),
   pub current_page: *mut (),
   pub ptr: u16,
-  pub capacity: u32
 }
 
-impl <const s : usize> SlabAllocator<s> {
+impl <const s : usize> LinearAllocator<s> {
   pub fn init() -> Self { unsafe {
     let page = alloc(Page4K).cast::<()>();
     *page.cast::<usize>() = usize::MAX;
     return Self { first_page: page,
-                  last_page: page,
                   current_page: page,
-                  ptr: (size_of::<usize>() / s).max(1) as u16,
-                  capacity: 4096 }
+                  ptr: (size_of::<usize>() / s).max(1) as u16, }
   } }
 }
 
-impl <const s : usize> SlabAllocator<s> {
+impl <const s : usize> LinearAllocator<s> {
+  fn expand_storage(&mut self) { unsafe {
+    let fresh_page = alloc(Page4K);
+    *fresh_page.cast::<usize>() = usize::MAX;
+    *self.current_page.cast::<*mut u8>() = fresh_page;
+    self.current_page = fresh_page.cast::<()>();
+    self.ptr = (size_of::<usize>() / s).max(1) as u16;
+  } }
   pub fn get_slot(&mut self) -> *mut () { unsafe {
     let product =
       self.current_page
@@ -66,21 +67,41 @@ impl <const s : usize> SlabAllocator<s> {
       .cast::<()>();
     self.ptr += 1;
     if self.ptr == 4096 / s as u16 {
-      let fresh_page = alloc(Page4K);
-      *fresh_page.cast::<*mut ()>() = self.last_page;
-      self.last_page = self.current_page;
-      self.current_page = fresh_page.cast::<()>();
-      self.capacity += 4096;
+      self.expand_storage();
     }
     return product;
   } }
+  pub fn get_contiguos_mem_for<T>(&mut self) -> *mut T {
+    let size_ = size_of::<T>() ;
+    let mem = self.get_contiguos_mem(size_);
+
+    return mem.cast::<T>()
+  }
+  pub fn get_contiguos_mem(&mut self, byte_count: usize) -> *mut () {
+    let size_ = byte_count;
+    if size_ >= 4096 - 8 {
+      panic!("Too much memory has been requested!")
+    }
+    let mut size = size_ / s;
+    if (size_ - (size * s)) != 0 { size += 1 }
+
+    let cap = (4096 / s) - self.ptr as usize;
+    if size >= cap {
+      self.expand_storage()
+    }
+    let mem = unsafe { self.current_page
+      .cast::<[u8;s]>()
+      .add(self.ptr as usize)
+      .cast::<()>() };
+    self.ptr += size as u16;
+
+    return mem
+  }
 }
 
-impl <const s : usize> Drop for SlabAllocator<s> {
+impl <const s : usize> Drop for LinearAllocator<s> {
   fn drop(&mut self) { unsafe {
-    dealloc(self.current_page.cast(), Page4K);
-    if self.current_page == self.last_page { return (); }
-    let mut ptr = self.last_page.cast::<u8>();
+    let mut ptr = self.first_page.cast::<u8>();
     loop {
       let tail = *ptr.cast::<usize>();
       dealloc(ptr, Page4K);

@@ -12,7 +12,7 @@ use crate::{elaborator::{
   support_structures::mini_vector::InlineVector};
 
 use super::{
-  action_chain::{Task, LinkKind, ActionLink, TaskGroupHandle},
+  action_chain::{Task, LinkKind, ActionLink,},
   frame_allocator::MemorySlabControlItem};
 
 #[derive(Debug)]
@@ -229,13 +229,13 @@ fn elab_worker_task_loop
 
     // work on a couple of local tasks
     let mut index = 0u16;
-    'that : loop {
+    'quantum : loop {
       let task = unsafe {
         (*task_cache.as_mut_ptr()
         .add(index as usize))
         .assume_init_mut()
       };
-      'immidiate : loop {
+      'work : loop {
         let action = task.project_action_chain();
         match action.project_tag() {
           LinkKind::FrameRequest => {
@@ -268,7 +268,7 @@ fn elab_worker_task_loop
               task.project_data_frame_ptr();
             mem.inject_parent_frame(parent_frame);
             task.inject_data_frame_ptr(mem);
-            continue 'immidiate;
+            continue 'work;
           },
           LinkKind::Step => {
             // actually do something
@@ -276,10 +276,12 @@ fn elab_worker_task_loop
               action.project_fun_ptr();
             let df_ptr = task.project_data_frame_ptr();
             let tf_handle =
-              TaskHandle(addr_of_mut!(spawned_subtasks), df_ptr);
+              TaskHandle(
+                addr_of_mut!(spawned_subtasks), df_ptr,
+                addr_of_mut!(task_frame_allocator));
             let done_work = work(tf_handle);
             task.inject_action_chain(done_work);
-            continue 'immidiate;
+            continue 'work;
           },
           LinkKind::Completion => {
             // task is done
@@ -295,14 +297,16 @@ fn elab_worker_task_loop
             let checker =
               action.project_progress_checker();
             let frame_ptr = TaskHandle(
-              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr());
+              addr_of_mut!(spawned_subtasks),
+              task.project_data_frame_ptr(),
+            addr_of_mut!(task_frame_allocator));
             let smth = checker(frame_ptr);
             if let Some(patch) = smth {
               // it can, indeed, continue
               task.inject_action_chain(patch);
-              continue 'immidiate;
+              continue 'work;
             } else {
-              // put it in the wait corner
+              // not ready to continue. put it in the wait corner
               pending_tasks.append(*task);
             }
           },
@@ -310,13 +314,33 @@ fn elab_worker_task_loop
             let gw =
               action.project_gateway();
             let frame_handle = TaskHandle(
-              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr());
+              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr(),
+            addr_of_mut!(task_frame_allocator));
             let next = gw.invoke_consume(frame_handle);
             task.inject_action_chain(next);
-            continue 'immidiate;
+            continue 'work;
           },
+          LinkKind::TaskLocalClosure => { unsafe {
+            let frame_handle = TaskHandle(
+              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr(),
+            addr_of_mut!(task_frame_allocator));
+
+            let clos_ptr = action.project_closure_ptr();
+            let (mem_ctrl, fn_ptr, _) =
+              *clos_ptr.cast::<(MemorySlabControlItem, *mut (), ())>();
+            let fun =
+              transmute::<_, fn (*mut (), TaskHandle) -> ActionLink>(fn_ptr) ;
+            let env_ptr =
+              clos_ptr.cast::<u64>().add(2).cast::<()>();
+            let cont =
+              (fun)(env_ptr, frame_handle) ;
+            task.inject_action_chain(cont);
+
+            task_frame_allocator.release_memory(mem_ctrl);
+            continue 'work;
+          } },
         }
-        break 'immidiate;
+        break 'work;
       }
       index += 1;
       if index == limit {
@@ -331,7 +355,7 @@ fn elab_worker_task_loop
               .cast::<Task>().write(item);
             }
           }
-          continue 'that;
+          continue 'quantum;
         } else {
           continue 'main;
         }
@@ -369,7 +393,7 @@ impl WorkGroupRef {
       let threads_ptr = addr_of_mut!(data.executors) as usize;
       let lc = &data.liveness_count;
       let thread = spawn(move || {
-        elab_worker_task_loop::<8>(
+        elab_worker_task_loop::<4>(
           stop_flag_ref, queue_ref,
           threads_ptr as *mut _, lc);
       });

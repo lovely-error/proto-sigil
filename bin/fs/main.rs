@@ -9,7 +9,8 @@ fn main () {
 
   let task = build_parsing_task(path);
 
-  let exec =
-    WorkGroupRef::init(1, task);
+  let exec = WorkGroupRef::init(1, task);
+
   exec.await_completion();
 }
+
