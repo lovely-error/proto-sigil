@@ -6,7 +6,8 @@ use std::{
   sync::atomic::{AtomicU64, Ordering, AtomicBool, fence},
   ptr::{drop_in_place, null_mut}, };
 
-use crate::{support_structures::traversing::Stream, trees::raw_syntax_nodes::DeclPtr};
+use crate::{
+  support_structures::traversing::Stream,};
 
 
 
@@ -166,6 +167,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
   fn shrink(&self) { unsafe {
     let mut page_ptr =
       self.head_ptr.cast::<UnsyncedBucketHeader>();
+    #[allow(unused_assignments)] // this is a bug in compiler, it seems
     let mut cutoff_point : *mut UnsyncedBucketHeader = null_mut();
     loop {
       let ptr = (*page_ptr).next_bucket_ptr;
@@ -245,7 +247,6 @@ impl <K: Hash, V> PasteboardTable<K, V> {
           }
         } else { break }
       }
-      //fence(Ordering::SeqCst);
       let updated_occupation_map = occupation_map | index;
       let update_outcome =
       header.occupation_map.compare_exchange_weak(
@@ -276,6 +277,7 @@ impl <K: Hash, V> PasteboardTable<K, V> {
     .add(((64 - number_of_free_slots) + offset) as usize)
     .write((hash, value));
     fence(Ordering::Release);
+    // make redundant store here for sync?
   } }
   // ATC is (n / (63 - m) - k) where m in [0;10]
   // Sensitive to the how far from head item being retrieved is located.
@@ -287,7 +289,8 @@ impl <K: Hash, V> PasteboardTable<K, V> {
   // If rust had 16 byte atomics the complexity could be lowered
   // to O(n / 95 - k) and retrieve time would be 50% better.
   // Somewhat like 3 ms.
-  // And if simd was stable, this could be 4 times faster.
+  // And if simd was stable, this could be 4 times faster
+  // on top of 50% improvement.
   pub fn retrieve_ref(&self, key: &K) -> Option<&V> { unsafe {
 
     let mut hasher = DefaultHasher::new();

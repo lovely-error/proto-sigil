@@ -1,12 +1,18 @@
 
-use std::{intrinsics::transmute, marker::PhantomData};
+use std::{intrinsics::transmute};
 
 use crate::parser::{
-  node_allocator::EntangledPtr, parser::{symbol::Symbol, SourceLocation}};
+  node_allocator::SomeEntangledPtr, parser::{symbol::Symbol,}};
 
 pub trait Locatable {
   type Location: Eq + Copy;
   fn compute_location(&self) -> Self::Location;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SourceLocation {
+  pub primary_offset: u32,
+  pub secondary_offset: u16
 }
 
 #[repr(u8)] #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,7 +87,7 @@ pub struct AppNodeArgsInline {
 pub struct AppNodeIndirectSmall {
   pub name: Symbol,
   pub sloc_data: SourceLocation,
-  pub args: EntangledPtr,
+  pub args: SomeEntangledPtr,
   pub ctx_ptr: RawCtxPtr,
 }
 
@@ -156,7 +162,7 @@ pub struct CompoundPatternNode_ArgsInline {
 #[derive(Debug, Clone, Copy)]
 pub struct CompoundPatternNode_ArgsIndiSlab {
   pub name: Symbol,
-  pub args: EntangledPtr
+  pub args: SomeEntangledPtr
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -167,13 +173,13 @@ pub struct RefPatternNode {
 #[derive(Debug, Clone, Copy)]
 pub struct RewriteRule {
   pub pattern_count: u16,
-  pub patterns: EntangledPtr,
+  pub patterns: SomeEntangledPtr,
   pub stencil: ExprPtr
 }
 #[derive(Debug, Clone, Copy)]
 pub struct Lambda {
   pub clause_count: u16,
-  pub rules: EntangledPtr,
+  pub rules: SomeEntangledPtr,
 }
 
 
@@ -253,7 +259,7 @@ pub struct Definition {
 pub struct Mapping {
   pub name: Symbol,
   pub type_: ExprPtr,
-  pub clauses: EntangledPtr
+  pub clauses: SomeEntangledPtr
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -285,7 +291,7 @@ impl LiftNodePtr {
 #[derive(Debug, Clone, Copy)]
 pub struct LiftNode {
   pub spine_expr: ExprPtr,
-  pub head: EntangledPtr,
+  pub head: SomeEntangledPtr,
   pub ctx_ptr: RawCtxPtr,
 }
 
@@ -319,26 +325,6 @@ impl RawCtxPtr {
 pub struct WitnessNodeIndirect {
   pub sloc_data: SourceLocation,
   pub seal: ExprPtr,
-  pub items: EntangledPtr,
+  pub items: SomeEntangledPtr,
 }
 
-
-pub struct ArrayPtr<T>(u64, PhantomData<T>);
-
-pub enum RawNodeRepr {
-  Star,
-  Ref(Symbol),
-  App {
-    root: Symbol,
-    argsuments: ArrayPtr<()>,
-  },
-  Fun {
-    head: ArrayPtr<()>,
-    spine: *const RawNode,
-  },
-}
-pub struct RawNode {
-  pub kind: RawNodeRepr,
-  pub location: SourceLocation,
-  pub implicit_context: ()
-}

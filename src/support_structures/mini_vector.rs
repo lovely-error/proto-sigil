@@ -13,7 +13,7 @@ pub struct InlineVector<const stack_size : usize, Item> {
   pub stack: [MaybeUninit<Item> ; stack_size],
   pub heap: *mut Item,
   ptr: u32,
-  heap_capacity: u16,
+  heap_capacity: u32,
   _own_mark: PhantomData<Item>,
 }
 
@@ -100,7 +100,7 @@ impl <const n : usize, T> InlineVector<n, T> {
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;
   }
-  pub fn move_content_into(self, recepient: *mut T) { unsafe {
+  pub fn move_content_into(&mut self, recepient: *mut T) { unsafe {
     copy_nonoverlapping(
       self.stack.as_ptr(), recepient.cast(),
       if self.ptr as usize <= n { self.ptr as usize } else { n });
@@ -110,7 +110,7 @@ impl <const n : usize, T> InlineVector<n, T> {
         recepient.add(n),
         self.ptr as usize - n);
     }
-    forget(self);
+    self.ptr = 0;
   } }
   pub fn reset(&mut self) {
     if needs_drop::<T>() { todo!() }

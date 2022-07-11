@@ -9,12 +9,12 @@ macro_rules! task {
 }
 #[macro_export]
 macro_rules! task_unfolding_loop {
-  (await let $binder:pat = $expr:expr ; $($tail:tt)*) => {
+  (fix let $binder:pat = $expr:expr ; $($tail:tt)*) => {
 
     task_unfolding_loop! { $($tail)* }
   };
-  (go $expr:expr ; $($tail:tt)*) => {
-    // da heck?!!
+  (await spawned ; $($tail:tt)*) => {
+
     task_unfolding_loop! { $($tail)* }
   };
   ($stmt:stmt ; $($tail:tt)*) => {
@@ -25,7 +25,9 @@ macro_rules! task_unfolding_loop {
 }
 
 fn test () { task! {
-  await let () = () ;
+  fix let () = () ;
   let a = 0 ;
-  go println!("{}", a) ;
+  loop { break } ;
+  if false { () } else { () } ;
+  await spawned ;
 } }

@@ -15,6 +15,7 @@ pub struct PresenseSet<T: Hash> {
   storage_ptr: *mut Header,
   _mark: PhantomData<T>,
 }
+
 impl <T: Hash> PresenseSet<T> {
   fn alloc_bucket() -> *mut () { unsafe {
     let page =

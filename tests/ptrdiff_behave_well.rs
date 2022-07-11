@@ -1,5 +1,5 @@
 
-use proto_sigil::parser::node_allocator::EntangledPtr;
+use proto_sigil::parser::node_allocator::SomeEntangledPtr;
 extern crate proto_sigil;
 
 
@@ -9,22 +9,22 @@ fn diff_ok() {
   let b = 11usize as *mut ();
 
   let diff =
-    EntangledPtr::from_ptr_pair(a, b);
+    SomeEntangledPtr::from_ptr_pair(a, b);
   //println!("{:#?}", diff);
-  if let Some(EntangledPtr(diff)) = diff {
+  if let Some(SomeEntangledPtr(diff)) = diff {
     assert!(diff == 4);
     assert!(diff as usize + (a as usize) == 11);
   } else { panic!("Wheres diff??") }
 
   let diff =
-    EntangledPtr::from_ptr_pair(b, a);
-  if let Some(EntangledPtr(diff)) = diff {
+    SomeEntangledPtr::from_ptr_pair(b, a);
+  if let Some(SomeEntangledPtr(diff)) = diff {
     assert!(diff == -4);
     assert!(b as isize + (diff as isize) == 7);
   } else { panic!("Wheres diff??") }
 
   let diff =
-    EntangledPtr::from_ptr_pair(a, b);
+    SomeEntangledPtr::from_ptr_pair(a, b);
   if let Some(ptr) = diff {
     let origin =
       ptr.reach_referent_from(a);
@@ -32,7 +32,7 @@ fn diff_ok() {
   } else { panic!("Wheres diff??") }
 
   let diff =
-    EntangledPtr::from_ptr_pair(b, a);
+    SomeEntangledPtr::from_ptr_pair(b, a);
   if let Some(ptr) = diff {
     let origin =
       ptr.reach_referent_from(b);

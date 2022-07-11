@@ -2,9 +2,9 @@
 use std::{mem::size_of};
 
 use proto_sigil::{
-  trees::raw_syntax_nodes::{
-    AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr, RawNode
-  },
+  expression_trees::{raw_syntax_nodes::{
+    AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr,
+  }, better_nodes::{RawNode, ConcretisedNode, }},
   parser::parser::symbol::Symbol,
   elaborator::{
     worker::WorkQueue,
@@ -63,11 +63,6 @@ fn iv_size () {
   assert_eq!(size_of::<InlineVector::<0, ()>>(), 16)
 }
 
-// #[test]
-// fn th_size () {
-//  use std::thread::JoinHandle;
-//   println!("{}", size_of::<JoinHandle<()>>())
-// }
 
 #[test]
 fn zero_types () {
@@ -78,6 +73,11 @@ fn zero_types () {
 fn size_of_alternative_raw_node () {
   println!("Size of RawNode is {} bytes", size_of::<RawNode>());
   assert!(size_of::<RawNode>() <= 64);
-  println!("{}", size_of::<[u16;7]>());
+}
+
+#[test]
+fn size_of_checked_node () {
+  println!("Size of CheckedNode is {} bytes", size_of::<ConcretisedNode>());
+  assert!(size_of::<ConcretisedNode>() <= 64);
 }
 

@@ -1,5 +1,5 @@
 
-use std::{alloc::{Layout, alloc, dealloc}, mem::size_of, panic};
+use std::{alloc::{Layout, alloc, dealloc}, mem::size_of, panic, marker::PhantomData};
 
 
 const Page4K : Layout = unsafe {
@@ -9,8 +9,8 @@ pub const NodeSlabSizeInBytes : usize = 64;
 
 
 #[derive(Debug, Copy, Clone)]
-pub struct EntangledPtr(pub i32);
-impl EntangledPtr {
+pub struct SomeEntangledPtr(pub i32);
+impl SomeEntangledPtr {
   pub fn init_null() -> Self {
     Self(0)
   }
@@ -34,8 +34,33 @@ impl EntangledPtr {
   } }
 }
 
+pub struct EntagledPtr<T>(i32, PhantomData<T>);
+impl <T> EntagledPtr<T> {
+  pub fn init_null() -> Self {
+    Self(0, PhantomData)
+  }
+  pub fn is_null(&self) -> bool {
+    self.0 == 0
+  }
+  pub fn from_ptr_pair(
+    origin: *mut (),
+    referent: *mut T
+  ) -> Option<Self> { unsafe {
+    let diff =
+      referent.cast::<u8>()
+              .offset_from(origin.cast());
+    if diff.abs() > (u32::MAX >> 1) as isize {
+      return None;
+    };
+    return Some(Self(diff as i32, PhantomData));
+  } }
+  pub fn reach_referent_from(&self, origin: *mut ()) -> *mut T { unsafe {
+    origin.cast::<u8>().offset(self.0 as isize).cast()
+  } }
+}
+
 #[derive(Debug)]
-pub struct LinearAllocator<const item_size : usize> {
+pub struct LinearAllocator<const MIN_ALLOC_SIZE : usize> {
   pub first_page: *mut (),
   pub current_page: *mut (),
   pub ptr: u16,

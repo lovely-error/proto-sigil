@@ -6,3 +6,4 @@ pub mod mini_vector;
 pub mod no_bullshit_closure;
 
 pub mod traversing;
+pub mod homemade_slice;

@@ -1,11 +1,11 @@
 
 use std::{
   intrinsics::{transmute,},
-  sync::atomic::{AtomicU64, Ordering, fence},
-  ptr::{null_mut, drop_in_place},
-  alloc::{Layout, alloc, dealloc}, mem::{needs_drop, size_of}, ops::SubAssign};
+  sync::atomic::{AtomicU64, Ordering, fence,},
+  ptr::{null_mut,},
+  alloc::{Layout, alloc, dealloc}, mem::{size_of}};
 
-use super::action_chain::TaskHandle;
+use super::action_chain::{TaskHandle, TaskMetadata};
 
 
 #[repr(align(8))] #[derive(Debug, Clone, Copy)]
@@ -26,7 +26,7 @@ const ORPHAN_PAGE : PageHeaderData = PageHeaderData(1);
 
 
 pub struct GranularSlabAllocator {
-  pub free_page_list: *mut (),
+  pub free_chained_pages: *mut (),
   pub b64_page_ptr: *mut (),
   pub b128_page_ptr: *mut (),
   pub b256_page_prt: *mut (),
@@ -39,7 +39,7 @@ pub enum SlabSize {
 }
 impl GranularSlabAllocator {
   pub fn init_new() -> Self {
-    Self { free_page_list: null_mut(), b128_page_ptr: null_mut(),
+    Self { free_chained_pages: null_mut(), b128_page_ptr: null_mut(),
            b256_page_prt: null_mut(), b512_page_ptr: null_mut(),
            b64_page_ptr: null_mut() }
   }
@@ -71,11 +71,11 @@ impl GranularSlabAllocator {
     let mut offset: u32;
     'paging : loop {
       if *page_ptr == null_mut() { unsafe { // need some memory here
-        if self.free_page_list != null_mut() { // have spare mem; utilise it!
+        if self.free_chained_pages != null_mut() { // have spare mem; utilise it!
           let page_after_this =
-            *self.free_page_list.cast::<*mut ()>();
-          *page_ptr = self.free_page_list;
-          self.free_page_list = page_after_this;
+            *self.free_chained_pages.cast::<*mut ()>();
+          *page_ptr = self.free_chained_pages;
+          self.free_chained_pages = page_after_this;
         } else { // no spare mem; alloc!
           let fresh_page =
             alloc(Layout::from_size_align_unchecked(4096, 1));
@@ -153,8 +153,8 @@ impl GranularSlabAllocator {
       !index, Ordering::Relaxed);
     let xored = previous & !index;
     if xored == transmute(ORPHAN_PAGE) { // hell, yeah! free page
-      *ptr.cast::<*mut ()>() = self.free_page_list;
-      self.free_page_list = ptr;
+      *ptr.cast::<*mut ()>() = self.free_chained_pages;
+      self.free_chained_pages = ptr;
     }
   } }
 }
@@ -164,7 +164,7 @@ impl Drop for GranularSlabAllocator {
     //let mut total_of_released_pages = 0u64;
     let page_layout =
       Layout::from_size_align_unchecked(4096, 1);
-    let mut page_ptr = self.free_page_list;
+    let mut page_ptr = self.free_chained_pages;
     let null_mut = null_mut();
     loop {
       if page_ptr == null_mut { break; }
@@ -205,19 +205,27 @@ impl MemorySlabControlItem {
       (sized << 6) + (index & ((1 << 6) - 1) as u8) as u64;
     return Self(indexed)
   } }
-  pub fn inject_parent_frame(&self, parent_ptr: MemorySlabControlItem) {
+  pub fn inject_parent_frame_ptr(&self, parent_ptr: MemorySlabControlItem) {
+    let mtd_ref = self.project_metadata_mref();
+    mtd_ref.parrent_frame_mtd = parent_ptr
+  }
+  pub fn project_metadata_mref(&self) -> &mut TaskMetadata {
     let size = self.project_size();
+    let space_for_task_metadata = size_of::<TaskMetadata>();
     let offset = match size {
-      SlabSize::Bytes128 => 120usize,
-      SlabSize::Bytes256 => 248,
-      SlabSize::Bytes512 => 504,
-      SlabSize::Bytes64 => 56,
-    };
+      SlabSize::Bytes128 => 128 ,
+      SlabSize::Bytes256 => 256 ,
+      SlabSize::Bytes512 => 512 ,
+      SlabSize::Bytes64 => 64 ,
+    } - space_for_task_metadata;
     unsafe {
-      let ptr =
-        self.project_slab_ptr().cast::<u8>().add(offset);
-      *ptr.cast::<MemorySlabControlItem>() = parent_ptr;
-    }
+      let ptr = self
+        .project_slab_ptr()
+        .cast::<u8>()
+        .add(offset)
+        .cast::<TaskMetadata>();
+      return &mut *ptr;
+    };
   }
   pub fn project_size(&self) -> SlabSize {
     unsafe { transmute(((self.0 >> 6) as u8) & (((1 << 2) - 1)) as u8) }
@@ -238,43 +246,55 @@ impl MemorySlabControlItem {
     let index = self.project_index() as usize;
     let base_ptr = self.project_base_ptr();
     return unsafe {
-      base_ptr.cast::<[u64;8]>()
-      .add(index * size).cast::<()>() }
+      base_ptr
+      .cast::<[u64;8]>()
+      .add(index * size)
+      .cast::<()>()
+    }
   }
 }
 
 
 pub struct RCTaskBox<T> {
-  pub(super) storage_ptr: *mut (u64, MemorySlabControlItem, T)
+  pub(super) storage_ptr: *mut (T, MemorySlabControlItem, u64)
 }
 
 impl <T> RCTaskBox<T> {
   pub fn init(handle: TaskHandle, value: T) -> Self {
     unsafe {
-      let size = match size_of::<(MemorySlabControlItem, T)>() {
-        0 ..= 65 => SlabSize::Bytes64,
-        0 ..= 129 => SlabSize::Bytes128,
-        0 ..= 257 => SlabSize::Bytes256,
-        0 ..= 513 => SlabSize::Bytes512,
+      let size = match size_of::<(T, MemorySlabControlItem, u64)>() {
+        0 ..= 64 => SlabSize::Bytes64,
+        0 ..= 128 => SlabSize::Bytes128,
+        0 ..= 256 => SlabSize::Bytes256,
+        0 ..= 512 => SlabSize::Bytes512,
         _ => panic!("Value is too big to fit into task local box")
       };
       let mem = handle.request_slab(size);
       let ptr =
-        mem.project_slab_ptr().cast::<(u64, MemorySlabControlItem, T)>();
-      ptr.write((0, mem, value));
+        mem.project_slab_ptr().cast::<(T, MemorySlabControlItem, u64)>();
+      ptr.write((value, mem, 0));
       return RCTaskBox { storage_ptr: ptr }
     }
   }
   pub fn get_ref(&self) -> &T { unsafe {
     &*self.storage_ptr.cast::<u64>().add(2).cast::<T>()
   } }
-  pub fn unbox(self, handle: TaskHandle) -> T { unsafe {
-    let (_, mci, val) = self.storage_ptr.read();
-    (&mut *handle.2).release_memory(mci);
-    return val;
+  pub fn try_unbox(self, handle: TaskHandle) -> Option<T> { unsafe {
+    let (_, mci, rc) = &*self.storage_ptr;
+    if *rc == 0 {
+      let val = self.storage_ptr.cast::<T>().read();
+      (&mut *handle.2).release_memory(*mci);
+      return Some(val);
+    } else {
+      return None
+    }
+
   } }
   pub fn vend_ref(&self) -> RcTaskBoxRef<T> {
-    unsafe { *self.storage_ptr.cast::<u64>() += 1 };
+    unsafe {
+      let (_, _, counter) = &mut *self.storage_ptr;
+      *counter += 1;
+    };
     return RcTaskBoxRef { storage_ptr: self.storage_ptr }
   }
 }
@@ -295,7 +315,7 @@ impl <T> Drop for RCTaskBox<T> {
 
 #[derive(Debug)]
 pub struct RcTaskBoxRef<T> {
-  pub(super) storage_ptr: *mut (u64, MemorySlabControlItem, T)
+  pub(super) storage_ptr: *mut (T, MemorySlabControlItem, u64)
 }
 impl <T> RcTaskBoxRef<T> {
   pub fn get_ref(&self) -> &T { unsafe {
@@ -304,7 +324,8 @@ impl <T> RcTaskBoxRef<T> {
 }
 impl <T> Clone for RcTaskBoxRef<T> {
   fn clone(&self) -> Self {
-    Self { storage_ptr: self.storage_ptr }
+    unsafe { *self.storage_ptr.cast::<u64>() += 1 };
+    return Self { storage_ptr: self.storage_ptr }
   }
 }
 

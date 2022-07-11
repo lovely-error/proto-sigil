@@ -125,6 +125,7 @@ fn concurent_insertions () { unsafe {
 
     let mut vec = Vec::<u64>::new();
     vec.reserve(400);
+    
     for i in 0 .. 400 {
       let item = table.retrieve_ref(&i).unwrap();
       vec.push(*item);

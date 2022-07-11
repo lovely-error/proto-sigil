@@ -119,7 +119,7 @@ pub struct WorkGroup {
 
 enum RetirementChoise { Suspend, Terminate, Continue }
 
-fn elab_worker_task_loop
+fn generic_runloop
   <const TASK_CACHE_SIZE : usize>(
   stop_flag_ref: &AtomicBool,
   queue_ref: &mut WorkQueue<Task>,
@@ -229,14 +229,27 @@ fn elab_worker_task_loop
 
     // work on a couple of local tasks
     let mut index = 0u16;
+    #[allow(unused_assignments)] // compiler bug
+    let mut num_of_spawned_subtasks = 0;
     'quantum : loop {
       let task = unsafe {
         (*task_cache.as_mut_ptr()
         .add(index as usize))
         .assume_init_mut()
       };
+      num_of_spawned_subtasks = 0;
       'work : loop {
         let action = task.project_action_chain();
+        if action.is_poller() {
+          let df_ptr = task.project_data_frame_ptr();
+          let count =
+            df_ptr.project_metadata_mref()
+            .await_counter.load(Ordering::Relaxed);
+          if count != 0 {
+            pending_tasks.append(*task);
+            break 'work;
+          }
+        }
         match action.project_tag() {
           LinkKind::FrameRequest => {
             // setup data frame for the task
@@ -248,16 +261,16 @@ fn elab_worker_task_loop
               DataFrameSize::Absent => {
                 MemorySlabControlItem::init_null()
               },
-              DataFrameSize::Bytes120 => {
+              DataFrameSize::AproxBytes128 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes128)
               },
-              DataFrameSize::Bytes248 => {
+              DataFrameSize::AproxBytes256 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes256)
               },
-              DataFrameSize::Bytes504 => {
+              DataFrameSize::AproxBytes512 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes512)
               },
-              DataFrameSize::Bytes56 => {
+              DataFrameSize::AproxBytes64 => {
                 task_frame_allocator.acquire_memory(SlabSize::Bytes64)
               },
             };
@@ -266,64 +279,83 @@ fn elab_worker_task_loop
             // root of the task tree point to null
             let parent_frame =
               task.project_data_frame_ptr();
-            mem.inject_parent_frame(parent_frame);
+            mem.inject_parent_frame_ptr(parent_frame);
             task.inject_data_frame_ptr(mem);
             continue 'work;
           },
           LinkKind::Step => {
             // actually do something
+            let action = task.project_action_chain();
             let work =
               action.project_fun_ptr();
             let df_ptr = task.project_data_frame_ptr();
             let tf_handle =
               TaskHandle(
-                addr_of_mut!(spawned_subtasks), df_ptr,
-                addr_of_mut!(task_frame_allocator));
-            let done_work = work(tf_handle);
-            task.inject_action_chain(done_work);
-            continue 'work;
+                addr_of_mut!(spawned_subtasks),
+                df_ptr,
+                addr_of_mut!(task_frame_allocator),
+                addr_of_mut!(num_of_spawned_subtasks));
+            let continuation = work(tf_handle);
+            task.inject_action_chain(continuation);
+            let mtd = df_ptr.project_metadata_mref();
+            mtd.await_counter.store(
+              num_of_spawned_subtasks, Ordering::Relaxed);
+            if num_of_spawned_subtasks != 0 {
+              task.mark_as_poller();
+              pending_tasks.append(*task);
+              break 'work
+            } else {
+              continue 'work;
+            }
           },
           LinkKind::Completion => {
             // task is done
-            let should_release = action.project_deletion_flag();
-            if should_release {
-              task_frame_allocator.release_memory(
-                task.project_data_frame_ptr());
+            let local_task_frame =
+              task.project_data_frame_ptr();
+            let tf = local_task_frame.project_metadata_mref();
+            let parrent_frame = tf.parrent_frame_mtd;
+            if !parrent_frame.is_null() {
+              let mtd = parrent_frame.project_metadata_mref();
+              let await_count = mtd.await_counter.load(Ordering::Relaxed);
+              if await_count != 0 {
+                let _ = mtd.await_counter
+                  .fetch_sub(1, Ordering::Relaxed);
+              }
             }
-          },
-          LinkKind::ProgressCheck => {
-            // some dependent task want to check in
-            // to see if all of its blockers were resolved
-            let checker =
-              action.project_progress_checker();
-            let frame_ptr = TaskHandle(
-              addr_of_mut!(spawned_subtasks),
-              task.project_data_frame_ptr(),
-            addr_of_mut!(task_frame_allocator));
-            let smth = checker(frame_ptr);
-            if let Some(patch) = smth {
-              // it can, indeed, continue
-              task.inject_action_chain(patch);
-              continue 'work;
-            } else {
-              // not ready to continue. put it in the wait corner
-              pending_tasks.append(*task);
-            }
+            task_frame_allocator.release_memory(
+              task.project_data_frame_ptr());
+
+            break 'work;
           },
           LinkKind::Gateway => {
             let gw =
               action.project_gateway();
             let frame_handle = TaskHandle(
-              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr(),
-            addr_of_mut!(task_frame_allocator));
-            let next = gw.invoke_consume(frame_handle);
-            task.inject_action_chain(next);
-            continue 'work;
+              addr_of_mut!(spawned_subtasks),
+              task.project_data_frame_ptr(),
+              addr_of_mut!(task_frame_allocator),
+              addr_of_mut!(num_of_spawned_subtasks));
+            let continuation = gw.invoke_consume(frame_handle);
+            task.inject_action_chain(continuation);
+
+            let df_ptr = task.project_data_frame_ptr();
+            let mtd = df_ptr.project_metadata_mref();
+            mtd.await_counter.store(
+              num_of_spawned_subtasks, Ordering::Relaxed);
+            if num_of_spawned_subtasks != 0 {
+              task.mark_as_poller();
+              pending_tasks.append(*task);
+              break 'work
+            } else {
+              continue 'work;
+            }
           },
           LinkKind::TaskLocalClosure => { unsafe {
             let frame_handle = TaskHandle(
-              addr_of_mut!(spawned_subtasks), task.project_data_frame_ptr(),
-            addr_of_mut!(task_frame_allocator));
+              addr_of_mut!(spawned_subtasks),
+              task.project_data_frame_ptr(),
+              addr_of_mut!(task_frame_allocator),
+              addr_of_mut!(num_of_spawned_subtasks));
 
             let clos_ptr = action.project_closure_ptr();
             let (mem_ctrl, fn_ptr, _) =
@@ -332,15 +364,25 @@ fn elab_worker_task_loop
               transmute::<_, fn (*mut (), TaskHandle) -> ActionLink>(fn_ptr) ;
             let env_ptr =
               clos_ptr.cast::<u64>().add(2).cast::<()>();
-            let cont =
+            let continuation =
               (fun)(env_ptr, frame_handle) ;
-            task.inject_action_chain(cont);
+            task.inject_action_chain(continuation);
 
             task_frame_allocator.release_memory(mem_ctrl);
-            continue 'work;
+
+            let df_ptr = task.project_data_frame_ptr();
+            let mtd = df_ptr.project_metadata_mref();
+            mtd.await_counter.store(
+              num_of_spawned_subtasks, Ordering::Relaxed);
+            if num_of_spawned_subtasks != 0 {
+              task.mark_as_poller();
+              pending_tasks.append(*task);
+              break 'work
+            } else {
+              continue 'work;
+            }
           } },
         }
-        break 'work;
       }
       index += 1;
       if index == limit {
@@ -348,13 +390,7 @@ fn elab_worker_task_loop
         if len > 0 && len <= TASK_CACHE_SIZE {
           // can refill cache without going through queue
           limit = len as u16; index = 0;
-          for i in 0 .. len {
-            let item = spawned_subtasks.pop().unwrap();
-            unsafe {
-              task_cache.as_mut_ptr().add(i)
-              .cast::<Task>().write(item);
-            }
-          }
+          spawned_subtasks.move_content_into(task_cache.as_mut_ptr().cast::<Task>());
           continue 'quantum;
         } else {
           continue 'main;
@@ -393,7 +429,7 @@ impl WorkGroupRef {
       let threads_ptr = addr_of_mut!(data.executors) as usize;
       let lc = &data.liveness_count;
       let thread = spawn(move || {
-        elab_worker_task_loop::<4>(
+        generic_runloop::<4>(
           stop_flag_ref, queue_ref,
           threads_ptr as *mut _, lc);
       });

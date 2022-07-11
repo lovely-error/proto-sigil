@@ -1,6 +1,5 @@
 extern crate proto_sigil;
 
-use std::mem::size_of;
 
 use proto_sigil::parser::node_allocator::{
   LinearAllocator, NodeSlabSizeInBytes};
@@ -52,7 +51,7 @@ fn can_alloc_contiguos() {
 }
 
 #[test]
-fn behaves_well_as_the_boudnry() {
+fn behaves_well_at_the_boudnry() {
   let mut alloc =
     LinearAllocator::<16>::init();
   for _ in 0 .. 254 {
