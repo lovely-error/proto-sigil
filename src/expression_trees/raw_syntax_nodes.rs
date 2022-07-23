@@ -2,7 +2,9 @@
 use std::{intrinsics::transmute};
 
 use crate::parser::{
-  node_allocator::SomeEntangledPtr, parser::{symbol::Symbol,}};
+  node_allocator::SomeEntangledPtr, };
+
+use super::better_nodes::Symbol;
 
 pub trait Locatable {
   type Location: Eq + Copy;

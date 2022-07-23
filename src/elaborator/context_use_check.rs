@@ -90,7 +90,7 @@ pub fn check_context_use(
       let ptr = rewrite_rules.project_ptr();
       let lim = rewrite_rules.project_count();
       for i in 0 .. lim {
-        let ConcretisedRewriteRule { lhs, .. }
+        let ConcretisedRewriteRule { rhs: lhs, .. }
         = unsafe { *ptr.add(i) };
         check_context_use(
           unsafe { *lhs }, diagnostic_service, encounted_items);

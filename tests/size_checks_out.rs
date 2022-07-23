@@ -4,8 +4,8 @@ use std::{mem::size_of};
 use proto_sigil::{
   expression_trees::{raw_syntax_nodes::{
     AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr,
-  }, better_nodes::{RawNode, ConcretisedNode, }},
-  parser::parser::symbol::Symbol,
+  }, better_nodes::{RawNode, ConcretisedNode, Symbol, }},
+
   elaborator::{
     worker::WorkQueue,
     action_chain::Task
@@ -15,6 +15,7 @@ use proto_sigil::{
 
 #[test]
 fn size_of_symbol_is_8_bytes () {
+  println!("{}", size_of::<Symbol>());
   assert!(size_of::<Symbol>() == 16)
 }
 

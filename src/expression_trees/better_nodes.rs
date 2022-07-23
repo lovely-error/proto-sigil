@@ -230,7 +230,7 @@ pub struct ConcretisedNode {
 #[derive(Debug, Clone, Copy)]
 pub struct ConcretisedRewriteRule {
   pub matchers: ArrayPtr<ConcretisedPattern>,
-  pub lhs: *mut ConcretisedNode,
+  pub rhs: *mut ConcretisedNode,
   pub location: SourceLocation
 }
 

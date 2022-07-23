@@ -341,7 +341,7 @@ fn concretise_rewrite_rule(
 
   let checked_rule = ConcretisedRewriteRule {
     matchers: checked_matchers,
-    lhs: checked_lhs,
+    rhs: checked_lhs,
     location
   };
 

@@ -2,7 +2,9 @@ use std::{
   io::{self, Write, Read}, path::{PathBuf}, slice,
   fs::{read_dir, ReadDir, File}};
 
-use proto_sigil::parser::parser::ParsingState;
+
+
+use proto_sigil::parser::new_parser::ParsingState;
 
 use crate::parser::CLIParseState;
 
@@ -229,27 +231,6 @@ impl KnotState {
     }
   }
   fn process_files(&mut self, files: Vec<PathBuf>) {
-    let mut decls = Vec::new();
-    let mut chars = String::new();
-    for file_path in files.iter() {
-      let mut data = File::open(file_path).unwrap();
-      let _ = data.read_to_string(&mut chars);
-      let mut parser = ParsingState::init(
-        chars.as_bytes());
-      let smth = parser.run_parsing();
-      match smth {
-        Ok(things) => {
-          for item in things {
-            decls.push(item);
-          }
-        },
-        Err(err) => {
-          let msg = format!("{:#?}", err);
-          let _ = self.out.write(msg.as_bytes());
-        }
-      }
-    }
-    let msg = format!("{:#?}", decls);
-    let _ = self.out.write(msg.as_bytes());
+    
   }
 }
