@@ -253,6 +253,13 @@ fn task_processor_runloop
             break 'work;
           }
         }
+        let local_data_frame = task.project_data_frame_ptr();
+        let task_handle =
+          TaskHandle(
+            &mut spawned_subtasks,
+            local_data_frame,
+            &mut task_frame_allocator,
+            &mut num_of_spawned_subtasks);
         match action.project_tag() {
           LinkKind::FrameRequest => {
             // setup data frame for the task
@@ -280,27 +287,18 @@ fn task_processor_runloop
             // put a ptr to a parrent frame into any child that
             // wants its own memory.
             // root of the task tree point to null
-            let parent_frame =
-              task.project_data_frame_ptr();
-            mem.inject_parent_frame_ptr(parent_frame);
+            mem.inject_parent_frame_ptr(local_data_frame);
             task.inject_data_frame_ptr(mem);
             continue 'work;
           },
           LinkKind::Step => {
             // actually do something
-            let action = task.project_action_chain();
             let work =
               action.project_fun_ptr();
-            let df_ptr = task.project_data_frame_ptr();
-            let tf_handle =
-              TaskHandle(
-                addr_of_mut!(spawned_subtasks),
-                df_ptr,
-                addr_of_mut!(task_frame_allocator),
-                addr_of_mut!(num_of_spawned_subtasks));
-            let continuation = work(tf_handle);
+
+            let continuation = work(task_handle);
             task.inject_action_chain(continuation);
-            let mtd = df_ptr.project_metadata_mref();
+            let mtd = local_data_frame.project_metadata_mref();
             mtd.await_counter.store(
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
@@ -313,10 +311,8 @@ fn task_processor_runloop
           },
           LinkKind::Completion => {
             // task is done
-            let local_task_frame =
-              task.project_data_frame_ptr();
-            let tf = local_task_frame.project_metadata_mref();
-            let parrent_frame = tf.parrent_frame_mtd;
+            let this_frame_mtd = local_data_frame.project_metadata_mref();
+            let parrent_frame = this_frame_mtd.parrent_frame_mtd;
             if !parrent_frame.is_null() {
               let mtd = parrent_frame.project_metadata_mref();
               let await_count = mtd.await_counter.load(Ordering::Relaxed);
@@ -325,24 +321,18 @@ fn task_processor_runloop
                   .fetch_sub(1, Ordering::Relaxed);
               }
             }
-            task_frame_allocator.release_memory(
-              task.project_data_frame_ptr());
+            task_frame_allocator.release_memory(local_data_frame);
 
             break 'work;
           },
           LinkKind::Gateway => {
             let gw =
               action.project_gateway();
-            let frame_handle = TaskHandle(
-              addr_of_mut!(spawned_subtasks),
-              task.project_data_frame_ptr(),
-              addr_of_mut!(task_frame_allocator),
-              addr_of_mut!(num_of_spawned_subtasks));
-            let continuation = gw.invoke_consume(frame_handle);
+
+            let continuation = gw.invoke_consume(task_handle);
             task.inject_action_chain(continuation);
 
-            let df_ptr = task.project_data_frame_ptr();
-            let mtd = df_ptr.project_metadata_mref();
+            let mtd = local_data_frame.project_metadata_mref();
             mtd.await_counter.store(
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
@@ -354,11 +344,6 @@ fn task_processor_runloop
             }
           },
           LinkKind::TaskLocalClosure => { unsafe {
-            let frame_handle = TaskHandle(
-              addr_of_mut!(spawned_subtasks),
-              task.project_data_frame_ptr(),
-              addr_of_mut!(task_frame_allocator),
-              addr_of_mut!(num_of_spawned_subtasks));
 
             let clos_ptr = action.project_closure_ptr();
             let (mem_ctrl, fn_ptr, _) =
@@ -368,13 +353,12 @@ fn task_processor_runloop
             let env_ptr =
               clos_ptr.cast::<u64>().add(2).cast::<()>();
             let continuation =
-              (fun)(env_ptr, frame_handle) ;
+              (fun)(env_ptr, task_handle) ;
             task.inject_action_chain(continuation);
 
             task_frame_allocator.release_memory(mem_ctrl);
 
-            let df_ptr = task.project_data_frame_ptr();
-            let mtd = df_ptr.project_metadata_mref();
+            let mtd = local_data_frame.project_metadata_mref();
             mtd.await_counter.store(
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
