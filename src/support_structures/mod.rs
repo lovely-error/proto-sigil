@@ -7,3 +7,6 @@ pub mod no_bullshit_closure;
 
 pub mod traversing;
 pub mod homemade_slice;
+pub mod fused_case;
+pub mod tagged_ptr;
+pub mod universal_bitwise_conversion;

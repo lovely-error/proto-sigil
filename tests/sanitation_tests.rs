@@ -294,8 +294,8 @@ fn def_to_fun_conversion () {
 #[test]
 fn rs_check () {
   let example_text =
-  "test_func : {T} (T) -> T".to_string() +
-  "| inl n => pt\n" +
+  "test_func : (Either Dot Dot) -> Dot".to_string() +
+  "| inr pt => pt\n" +
   "| inl pt => pt" ;
 
   let mut parser = ParsingState::init(&example_text);

@@ -67,3 +67,15 @@ fn items_count () {
   iv.append(0);
   assert!(iv.count_items() == 3);
 }
+
+#[test]
+fn put_in_loads () {
+  const LIMIT : usize = 10_000;
+  let mut iv = InlineVector::<32, usize>::init();
+  for i in 0 ..= LIMIT {
+    iv.append(i);
+  }
+  for i in 0 ..= LIMIT {
+    assert!(*iv.get_ref(i) == i)
+  }
+}

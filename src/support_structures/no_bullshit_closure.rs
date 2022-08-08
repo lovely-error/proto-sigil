@@ -2,8 +2,8 @@
 use std::{
   mem::{size_of, align_of, }, ptr::{null_mut, drop_in_place,},
   alloc::{alloc, Layout, dealloc}, marker::PhantomData,
-  intrinsics::{transmute,},};
-
+  intrinsics::{transmute,},
+};
 
 
 pub struct LocalClosure<Env, I, O>
@@ -254,7 +254,16 @@ macro_rules! detached {
     $(-> $rt:ty)? $bl:block )
   => {
     {
+      use crate::{
+        mk_ty_intro,
+        build_capture_tuple,
+        build_destructor_tuple,
+        mk_args_intro,
+        mk_ty_rec,
+        mk_args_rec
+      };
       let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
+      // use crate::support_structures::no_bullshit_closure::DetachedClosure;
       let clos = DetachedClosure::init_with_global_mem(
         env, | env , args : mk_ty_intro! { $($($arg_name $(: $ty)? ,)*)? } |
         $(-> $rt)? {
@@ -348,7 +357,16 @@ macro_rules! local {
     $(-> $rt:ty)? $bl:block )
   => {
     {
+      use crate::{
+        mk_ty_intro,
+        build_capture_tuple,
+        build_destructor_tuple,
+        mk_args_intro,
+        mk_ty_rec,
+        mk_args_rec
+      };
       let env = build_capture_tuple! { $($capt_name $(= $expr)? ,)* };
+      // use crate::support_structures::no_bullshit_closure::LocalClosure;
       let clos = LocalClosure::init(
         env, | env , args : mk_ty_intro! { $($($arg_name $(: $ty)? ,)*)? } |
         $(-> $rt)? {

@@ -211,26 +211,13 @@ impl KnotState {
     self.watched_directory = Some(dir);
   }
   fn check_files(&mut self) {
-    if let Some(ref mut dir) = self.watched_directory {
-      let mut source_code_files = Vec::new();
-      for item in dir {
-        if let Ok(ref item) = item {
-          let path = item.path();
-          let ext = path.extension();
-          if let Some(ext) = ext {
-            if ext == "sg" { source_code_files.push(path) }
-          }
-        }
-      }
-      self.process_files(source_code_files);
+    if let Some(dir) = &self.watched_directory {
+      unimplemented!()
     } else {
       let err = [
         RED, "No directory was set for check", DN, "\n"
       ];
       self.write_lines(&err, None);
     }
-  }
-  fn process_files(&mut self, files: Vec<PathBuf>) {
-    
   }
 }

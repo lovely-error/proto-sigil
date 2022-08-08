@@ -360,7 +360,6 @@ impl <K: Hash, V> Drop for PasteboardTable<K, V> {
           }
         }
       }
-      fence(Ordering::Release);
       dealloc(bucket_ptr.cast(), layout);
 
       let next_bucket = header.next_bucket_ptr;

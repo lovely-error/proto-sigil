@@ -1,14 +1,15 @@
 
 
 use std::{
-  alloc::dealloc, mem::{size_of, align_of,},
-  ptr::{null_mut}, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher};
+  alloc::dealloc, mem::{size_of, align_of, ManuallyDrop, MaybeUninit,},
+  ptr::{null_mut, addr_of_mut}, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher, path::PathBuf};
 
 use proto_sigil::{elaborator::{
-  worker::{WorkGroup},},};
+  worker::{WorkGroup, WorkGroupRef}, self,}, support_structures::universal_bitwise_conversion::bitcast,
+};
 
 
-  
+
 static mut FLAG : bool = false;
 
 struct Example(bool);
@@ -102,3 +103,75 @@ fn count_ones () {
   let count = num.trailing_ones();
   println!("{count}")
 }
+
+// #[test]
+fn par () {
+  let path = PathBuf::from("/Users/cromobeingnur/testim_sigi");
+  let wg = elaborator::main::elab_invocation_setup(path);
+  let executor = WorkGroupRef::init(6, wg);
+  executor.await_completion();
+}
+
+#[test]
+fn test () {
+  #[repr(packed)]
+  struct  H {
+    b: u16,
+    a: bool,
+  }
+  println!("Size of H is {}", size_of::<H>())
+}
+
+fn nullify<T>(val:T) -> T {
+  let size_of = size_of::<T>();
+  let mut val = val;
+  let ptr = addr_of_mut!(val).cast::<u8>() ;
+  for i in 0 .. size_of {
+    unsafe { *ptr.add(i) = 0 };
+  }
+  return val;
+}
+
+#[derive(Debug, PartialEq)]
+struct Test {
+  a: u16,
+  b: bool,
+}
+
+#[test]
+fn byte_reading_works () {
+  let nullified = nullify(Test {a:u16::MAX, b:true});
+  // println!("{:#?}", nullified)
+  assert!(nullified == Test {a:0,b:false})
+}
+
+
+#[test]
+fn bitcasting () {
+  fn ll<T>(val:T) {
+    let val_bits = unsafe { bitcast::<_, [u8;3]>(val) };
+    // println!("{:#?}", val_bits)
+    assert!([1,255,255] == val_bits)
+  }
+  #[repr(packed)]
+  struct J { a: bool, b: u16 }
+
+  ll(J {a:true, b:u16::MAX});
+}
+
+// #[test]
+// fn what () {
+//   #[repr(C)]
+//   union K {
+//     word: u64,
+//     byte: u8,
+//   }
+//   let mut val = MaybeUninit::zeroed();
+//   unsafe {
+//     *val.as_mut_ptr() = K { word: u64::MAX };
+//     *val.as_mut_ptr() = K { byte: 0x0F };
+//   }
+//   let val = unsafe { val.assume_init().word };
+//   println!("{}", val);
+//   assert!(val == !0xFF + 0x0F);
+// }

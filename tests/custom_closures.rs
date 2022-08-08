@@ -6,7 +6,8 @@ use proto_sigil::{
   detached,
   build_capture_tuple,
   build_destructor_tuple,
-  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, local, };
+  mk_args_intro, mk_args_rec, mk_ty_intro, mk_ty_rec, local,
+};
 
 
 #[test]

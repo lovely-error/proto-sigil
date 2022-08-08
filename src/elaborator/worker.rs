@@ -1,4 +1,5 @@
 
+
 use std::{
   thread::{JoinHandle, spawn, park, yield_now},
   sync::{
@@ -119,7 +120,7 @@ pub struct WorkGroup {
 
 enum RetirementChoise { Suspend, Terminate, Continue }
 
-fn generic_runloop
+fn task_processor_runloop
   <const TASK_CACHE_SIZE : usize>(
   stop_flag_ref: &AtomicBool,
   queue_ref: &mut WorkQueue<Task>,
@@ -129,8 +130,9 @@ fn generic_runloop
   assert!(
     TASK_CACHE_SIZE <= u8::MAX as usize,
     "Too much of cache is bad for anyone!");
+
   let mut task_frame_allocator =
-    GranularSlabAllocator::init_new();
+    GranularSlabAllocator::init();
   let mut task_cache: [MaybeUninit<Task> ; TASK_CACHE_SIZE] =
     unsafe { MaybeUninit::uninit().assume_init() };
   let mut limit: u16 = 0;
@@ -138,6 +140,7 @@ fn generic_runloop
     InlineVector::<24, Task>::init();
   let mut pending_tasks =
     InlineVector::<6, Task>::init();
+
   'main : loop {
     if stop_flag_ref.load(Ordering::Relaxed) { break 'main; };
     // take a couple of tasks to this thread's storage
@@ -160,7 +163,7 @@ fn generic_runloop
         if !did_produce_work {
           // nothing was on queue and no pending tasks
           // were generated locally in previous quantum.
-          // other threads migh still generate work.
+          // other threads may still emit more job.
           let lc =
             liveness_count.fetch_sub(1, Ordering::Relaxed) - 1;
           //println!("{}", lc);
@@ -429,7 +432,7 @@ impl WorkGroupRef {
       let threads_ptr = addr_of_mut!(data.executors) as usize;
       let lc = &data.liveness_count;
       let thread = spawn(move || {
-        generic_runloop::<4>(
+        task_processor_runloop::<4>(
           stop_flag_ref, queue_ref,
           threads_ptr as *mut _, lc);
       });
@@ -448,4 +451,6 @@ impl WorkGroupRef {
     self.0.was_signaled_to_stop.store(true, Ordering::Relaxed);
   }
 }
+
+
 

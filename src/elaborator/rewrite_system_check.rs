@@ -3,7 +3,12 @@
 use crate::expression_trees::{better_nodes::{
   Declaration, DeclKind,  ConcretisedNode, ConcretisedNodeRepr, ConcretisedPattern, ConcretisedPatternKind, Symbol,
 }, raw_syntax_nodes::SourceLocation};
-use super::{diagnostics::{SomeDiagnosticsDelegate, ProblemReport, Kind}, environment::PasteboardTable};
+use super::{
+  diagnostics::{
+    SomeDiagnosticsDelegate, ProblemReport, Kind
+  },
+  // environment::PasteboardTable
+};
 
 
 
@@ -29,9 +34,10 @@ pub fn check_rewrite_system(
     let ptr = rewrite_rules.project_ptr();
     let lim = rewrite_rules.project_count();
 
-    let mut rule_local_binders = Vec::<(BindSynthTypeShape, Symbol)>::new();
+    let mut rule_local_binders =
+      Vec::<(BindSynthTypeShape, Symbol)>::new();
 
-    let mut rhs_ix = 0;
+    // let mut rhs_ix = 0;
     for column in 0 .. arity {
       let mut root = BindSynthTypeShape::Variable;
 
@@ -46,13 +52,12 @@ pub fn check_rewrite_system(
           &mut rule_local_binders, &mut root,);
       }
 
-      let rhs = unsafe { *(*ptr.add(rhs_ix)).rhs };
-      inspect_rhs(rhs, &mut rule_local_binders, diagnostic_delegate);
+      // let rhs = unsafe { *(*ptr.add(rhs_ix)).rhs };
 
-      rhs_ix += 1;
+
+      // rhs_ix += 1;
       rule_local_binders.clear();
     }
-
 
 
     // need to check against signature as well
@@ -248,64 +253,64 @@ fn refine_shape(
 
 
 
-fn inspect_rhs(
-  rhs: ConcretisedNode,
-  binders: &mut Vec<(BindSynthTypeShape, Symbol)>,
-  diagnostic_delegate: &mut dyn SomeDiagnosticsDelegate,
-) {
+// fn inspect_rhs(
+//   rhs: ConcretisedNode,
+//   binders: &mut Vec<(BindSynthTypeShape, Symbol)>,
+//   diagnostic_delegate: &mut dyn SomeDiagnosticsDelegate,
+// ) {
 
 
-}
+// }
 
-fn inspect_descend(
-  rhs: ConcretisedNode,
-  decls: &PasteboardTable<Symbol, Declaration>
-) {
-  match rhs.kind {
-    ConcretisedNodeRepr::Star |
-    ConcretisedNodeRepr::Reference { .. } |
-    ConcretisedNodeRepr::Void |
-    ConcretisedNodeRepr::Singleton |
-    ConcretisedNodeRepr::Pt => (),
+// fn inspect_descend(
+//   rhs: ConcretisedNode,
+//   decls: &PasteboardTable<Symbol, Declaration>
+// ) {
+//   match rhs.kind {
+//     ConcretisedNodeRepr::Star |
+//     ConcretisedNodeRepr::Reference { .. } |
+//     ConcretisedNodeRepr::Void |
+//     ConcretisedNodeRepr::Singleton |
+//     ConcretisedNodeRepr::Pt => (),
 
-    ConcretisedNodeRepr::App { root, arguments, origination: is_global } => {
-      let item = decls.retrieve_ref(&root);
-      match item {
-        Some(item) => {
-          
-        },
-        None => panic!(),
-      }
-    },
-    ConcretisedNodeRepr::Wit { premises, conclusion } => {
+//     ConcretisedNodeRepr::App { root, arguments, origination: is_global } => {
+//       let item = decls.retrieve_ref(&root);
+//       match item {
+//         Some(item) => {
 
-    },
-    ConcretisedNodeRepr::Sigma { head, spine } => {
+//         },
+//         None => panic!(),
+//       }
+//     },
+//     ConcretisedNodeRepr::Wit { premises, conclusion } => {
 
-    },
-    ConcretisedNodeRepr::Arrow { head, spine, performs_introspection } => {
+//     },
+//     ConcretisedNodeRepr::Sigma { head, spine } => {
 
-    },
-    ConcretisedNodeRepr::Lam { rewrite_rules } => {
+//     },
+//     ConcretisedNodeRepr::Arrow { head, spine, performs_introspection } => {
 
-    },
-    ConcretisedNodeRepr::Either(l, r) |
-    ConcretisedNodeRepr::Pair(l, r) => {
+//     },
+//     ConcretisedNodeRepr::Lam { rewrite_rules } => {
+
+//     },
+//     ConcretisedNodeRepr::Either(l, r) |
+//     ConcretisedNodeRepr::Pair(l, r) => {
 
 
 
-    },
-    ConcretisedNodeRepr::Tuple(l, r) => {
-      let l = unsafe { *l };
-      inspect_descend(l, decls);
-      let r = unsafe { *r };
-      inspect_descend(r, decls);
+//     },
+//     ConcretisedNodeRepr::Tuple(l, r) => {
+//       let l = unsafe { *l };
+//       inspect_descend(l, decls);
+//       let r = unsafe { *r };
+//       inspect_descend(r, decls);
 
-    },
-    ConcretisedNodeRepr::Left(v) |
-    ConcretisedNodeRepr::Right(v) => {
-      let v = unsafe { *v };
-      inspect_descend(v, decls);
-    },
-  }
-}
+//     },
+//     ConcretisedNodeRepr::Left(v) |
+//     ConcretisedNodeRepr::Right(v) => {
+//       let v = unsafe { *v };
+//       inspect_descend(v, decls);
+//     },
+//   }
+// }

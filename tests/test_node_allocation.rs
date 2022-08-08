@@ -1,14 +1,13 @@
 extern crate proto_sigil;
 
 
-use proto_sigil::parser::node_allocator::{
-  LinearAllocator, NodeSlabSizeInBytes};
+use proto_sigil::parser::node_allocator::{LinearAllocator};
 
 
 #[test]
 fn alloc_happens_at_all() { unsafe {
   let mut alloc =
-    LinearAllocator::<NodeSlabSizeInBytes>::init();
+    LinearAllocator::<64>::init();
   //println!("{:#?}", alloc);
   assert!(alloc.current_page == alloc.first_page);
   assert!(alloc.ptr == 1);
@@ -16,7 +15,8 @@ fn alloc_happens_at_all() { unsafe {
   alloc.get_slot().cast::<usize>().write(usize::MAX);
   let same_thing =
     *alloc.current_page
-      .cast::<[u8;NodeSlabSizeInBytes]>().add(1)
+      .cast::<[u8; 64]>()
+      .add(1)
       .cast::<usize>();
   assert!(same_thing == usize::MAX);
   assert!(alloc.ptr == 2);
@@ -26,8 +26,8 @@ fn alloc_happens_at_all() { unsafe {
 #[test]
 fn usable() {
   let mut alloc =
-    LinearAllocator::<NodeSlabSizeInBytes>::init();
-  for _ in 1 .. NodeSlabSizeInBytes - 1 {
+    LinearAllocator::<64>::init();
+  for _ in 1 .. 64 - 1 {
     let _ = alloc.get_slot();
   }
   //println!("{:#?}", alloc);

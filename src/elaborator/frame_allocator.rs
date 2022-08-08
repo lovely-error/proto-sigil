@@ -38,7 +38,7 @@ pub enum SlabSize {
   Bytes128, Bytes256, Bytes512, Bytes64
 }
 impl GranularSlabAllocator {
-  pub fn init_new() -> Self {
+  pub fn init() -> Self {
     Self { free_chained_pages: null_mut(), b128_page_ptr: null_mut(),
            b256_page_prt: null_mut(), b512_page_ptr: null_mut(),
            b64_page_ptr: null_mut() }
@@ -137,7 +137,6 @@ impl GranularSlabAllocator {
         }
       }
     }
-    fence(Ordering::Release);
     control_item =
       MemorySlabControlItem::init(
         (*page_ptr).cast(), offset as u8, slab_size);

@@ -1,5 +1,5 @@
 
-use std::{mem::size_of};
+use std::{mem::{size_of, ManuallyDrop}, intrinsics::transmute, ptr::addr_of_mut};
 
 use proto_sigil::{
   expression_trees::{raw_syntax_nodes::{
@@ -8,9 +8,9 @@ use proto_sigil::{
 
   elaborator::{
     worker::WorkQueue,
-    action_chain::Task
+    action_chain::{Task, TaskMetadata}
   },
-  support_structures::mini_vector::InlineVector
+  support_structures::mini_vector::InlineVector, parser::node_allocator::EntagledPtr
 };
 
 #[test]
@@ -80,5 +80,26 @@ fn size_of_alternative_raw_node () {
 fn size_of_checked_node () {
   println!("Size of CheckedNode is {} bytes", size_of::<ConcretisedNode>());
   assert!(size_of::<ConcretisedNode>() <= 64);
+}
+
+
+#[test]
+fn size_of_compact_node () {
+  struct Node {
+    a: EntagledPtr<Node>,
+    b: EntagledPtr<Node>,
+    c: EntagledPtr<Node>,
+    d: EntagledPtr<Node>,
+    kinda_size: u64,
+    name: u64,
+  }
+  println!("Size of Node is {} bytes", size_of::<Node>());
+
+}
+
+#[test]
+fn size_of_task_metadata () {
+  // println!("Size of task metadata is {} bytes.", size_of::<TaskMetadata>())
+  assert!(size_of::<TaskMetadata>() <= 16, "Size of task metadata is bigger then anticipated!!")
 }
 

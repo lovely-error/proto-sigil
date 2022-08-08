@@ -5,8 +5,6 @@ use std::{alloc::{Layout, alloc, dealloc}, mem::size_of, panic, marker::PhantomD
 const Page4K : Layout = unsafe {
   Layout::from_size_align_unchecked(4096, 1) } ;
 
-pub const NodeSlabSizeInBytes : usize = 64;
-
 
 #[derive(Debug, Copy, Clone)]
 pub struct SomeEntangledPtr(pub i32);

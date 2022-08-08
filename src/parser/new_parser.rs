@@ -19,13 +19,15 @@ pub struct TempSlocInfo {
   pub primary_offset: u32
 }
 
+const MINIMUM_ALLOC_SIZE: usize = 16;
+
 pub struct ParsingState {
   bytes: Slice<u8>,
   current_char: u32,
   pub byte_index: usize,
     // Todo: figure out how to expose fields to testing code
   line_number: u32,
-  lin_alloc: Option<LinearAllocator<64>>,
+  lin_alloc: Option<LinearAllocator<MINIMUM_ALLOC_SIZE>>,
 }
 
 fn is_valid_char_for_symbol(char: u32) -> bool {
@@ -83,21 +85,18 @@ impl ParsingState {
 
 /// Accessors
 impl ParsingState {
-  fn get_slab64(&mut self) -> *mut () {
-    if let None = self.lin_alloc {
-      //unlikely(true);
-      let local_mem_man =
-        LinearAllocator::<64>::init();
-      self.lin_alloc = Some(local_mem_man);
+  fn allocate<T>(&mut self, object: T) -> *mut T {
+    let mem = self.get_raw_mem(size_of::<T>());
+    unsafe {
+      let ptr = mem as *mut T;
+      ptr.write(object);
+      return ptr;
     }
-    if let Some(ref mut memman) = self.lin_alloc {
-      return memman.get_slot();
-    }
-    unreachable!()
   }
   fn get_raw_mem(&mut self, byte_count: usize) -> *mut () {
     if let None = self.lin_alloc {
-      let fresh_mem_man = LinearAllocator::<64>::init();
+      let fresh_mem_man =
+        LinearAllocator::<MINIMUM_ALLOC_SIZE>::init();
       self.lin_alloc = Some(fresh_mem_man);
     }
     if let Some(ref mut mem_man) = self.lin_alloc {
@@ -240,7 +239,6 @@ impl ParsingState {
 impl ParsingState {
   pub fn parse_symbol(&mut self) -> Maybe<Symbol> {
     let loc = self.begin_sloc();
-    let sloc_begin = self.begin_sloc();
     let symbol_start = self.byte_index;
     self.skip_while(|self_|{
       let char = self_.current_char;
@@ -249,7 +247,6 @@ impl ParsingState {
     let symbol_end = self.byte_index;
     let loc = self.end_sloc(loc);
     let diff = symbol_end - symbol_start;
-    let sloc = self.end_sloc(sloc_begin);
     if diff == 0 {
       throw!(self.fail_with(ParseErrorKind::EmptySymbol));
     };
@@ -429,8 +426,7 @@ impl ParsingState {
       self.fail_with(ParseErrorKind::UnexpectedCharacter) };
     let loc = self.end_sloc(loc);
 
-    let evidence_ = self.get_slab64().cast::<RawNode>();
-    unsafe { evidence_.write(evidence) };
+    let evidence_ = self.allocate(evidence);
 
     let count = premises.count_items();
     let concs =
@@ -495,8 +491,8 @@ impl ParsingState {
     };
     let depth = self.probe_depth();
     let spine_ = self.parse_expr(depth)?;
-    let spine = self.get_slab64().cast::<RawNode>();
-    unsafe { spine.write(spine_) };
+    let spine = self.allocate(spine_);
+
     let loc = self.end_sloc(loc);
 
     let count = items.count_items();
@@ -584,8 +580,7 @@ impl ParsingState {
     let depth = self.probe_depth();
     let stencil = self.parse_expr(
       if depth == 0 { indentation_depth } else { depth } )?;
-    let lhs = self.get_slab64().cast::<RawNode>();
-    unsafe { lhs.write(stencil) }
+    let lhs = self.allocate(stencil);
 
     let count = patterns.count_items();
     let patterns_ =
@@ -672,14 +667,14 @@ impl ParsingState {
     let depth = self.probe_depth();
     let type_ =
       self.parse_expr(depth)?;
-    let type__ = self.get_slab64().cast::<RawNode>();
-    unsafe { type__.write(type_) }
+    let type__ = self.allocate(type_);
+
     let mut depth = self.probe_depth();
     if self.prefix_match("=", true) {
       depth = self.probe_depth();
       let value = self.parse_expr(depth)?;
-      let value_ = self.get_slab64().cast::<RawNode>();
-      unsafe { value_.write(value) }
+      let value_ = self.allocate(value);
+  
       let def_decl = Declaration {
         repr: DeclKind::RawDefinition { name, given_type: type__, value: value_ },
         participate_in_cycle_formation: false

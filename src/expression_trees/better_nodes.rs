@@ -1,6 +1,12 @@
-use std::{marker::PhantomData, intrinsics::transmute, hash::Hash};
+use std::{
+  marker::PhantomData, intrinsics::transmute, hash::Hash,
+  mem::size_of
+};
 
-use crate::{support_structures::homemade_slice::Slice, parser::node_allocator::EntagledPtr};
+use crate::{
+  support_structures::homemade_slice::Slice,
+  parser::node_allocator::EntagledPtr
+};
 
 use super::raw_syntax_nodes::SourceLocation;
 
@@ -51,6 +57,10 @@ impl <T> ArrayPtr<T> {
   }
   pub fn project_count(&self) -> usize {
     (self.0 as u8) as usize
+  }
+  pub fn get_ptr(&self, index: usize) -> *mut T {
+    unsafe {
+      self.project_ptr().add(index) }
   }
 }
 impl <T> ArrayPtr<T> where T: Copy {
@@ -186,7 +196,7 @@ pub enum Origin {
 pub enum ConcretisedNodeRepr {
   Star,
   Reference {
-    ref_: Symbol,
+    name: Symbol,
     origination: Origin
   },
   App {
@@ -251,76 +261,3 @@ pub enum ConcretisedPatternKind {
 }
 
 
-#[derive(Debug, Clone, Copy)]
-pub struct EvaluableExprPtr(u64);
-impl EvaluableExprPtr {
-  // const TAG_SIZE : u64 = 5;
-  pub fn init(ptr: *mut (), kind: EvaluableExprRepr) -> Self {
-    let ptr = ((ptr as u64) << 5) + (kind as u64);
-    return Self(ptr)
-  }
-  pub fn project_ptr(&self) -> *mut () {
-    (self.0 >> 5) as *mut ()
-  }
-  pub fn project_kind(&self) -> EvaluableExprRepr {
-    let proj = (self.0 as u8) & 0xF;
-    return unsafe { transmute(proj) }
-  }
-  pub fn is_marked_for_lazy_copying(&self) -> bool {
-    let mask = 1u64 << 4;
-    let val = self.0 & mask;
-    return val != 0
-  }
-  pub fn mark_for_lazy_copying(&mut self) {
-    let mask = 1u64 << 4;
-    let marked = self.0 | mask;
-    self.0 = marked
-  }
-}
-
-pub struct TypePtr(u64);
-impl TypePtr {
-
-}
-
-pub enum EvalExprTypeType {
-  Mono, Multi, Unknown
-}
-
-
-pub struct Reference {
-  pub symbol: Symbol,
-  pub is_global: bool,
-}
-pub struct Application {
-  pub root: Symbol,
-  pub arguments: (),
-  pub is_global: bool
-}
-pub struct Witness {
-  pub premises: (),
-  pub conclusion: (),
-  pub type_expr: (),
-}
-pub struct Lift {
-  pub head: ArrayPtr<(Option<Symbol>, ())>,
-  pub spine: (),
-}
-pub struct Lambda {
-  pub rewrite_rules: ArrayPtr<ConcretisedRewriteRule>,
-  pub type_expr: (),
-}
-pub struct Node2 {
-  pub left: EntagledPtr<EvaluableExprPtr>,
-  pub right: EntagledPtr<EvaluableExprPtr>,
-  pub type_expr: (),
-}
-pub struct Node1 {
-  pub value: (),
-  pub type_expr: (),
-}
-
-pub enum EvaluableExprRepr {
-  Star, Reference, App, Wit, Sigma, Pi , Lam , Void,
-  Singleton, Pt, Pair, Tuple, Either, Left, Right,
-}

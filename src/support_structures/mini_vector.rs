@@ -1,7 +1,7 @@
 
 use std::intrinsics::copy_nonoverlapping;
 use std::marker::PhantomData;
-use std::mem::{MaybeUninit, size_of, align_of, forget, needs_drop};
+use std::mem::{MaybeUninit, size_of, align_of, needs_drop};
 use std::alloc::{alloc, Layout, dealloc};
 use std::ptr::{drop_in_place,};
 
@@ -10,8 +10,8 @@ use crate::elaborator::worker::LoopQueue;
 
 #[derive(Debug)]
 pub struct InlineVector<const stack_size : usize, Item> {
-  pub stack: [MaybeUninit<Item> ; stack_size],
-  pub heap: *mut Item,
+  pub(crate) stack: [MaybeUninit<Item> ; stack_size],
+  pub(crate) heap: *mut Item,
   ptr: u32,
   heap_capacity: u32,
   _own_mark: PhantomData<Item>,
@@ -23,7 +23,7 @@ impl <const n : usize, T> InlineVector<n, T> {
       heap: usize::MAX as *mut T,
       ptr: 0,
       stack: unsafe { MaybeUninit::uninit().assume_init() },
-      heap_capacity: 32,
+      heap_capacity: (n * 2) as u32,
       _own_mark: PhantomData
     }
   }
@@ -42,9 +42,10 @@ impl <const n : usize, T> InlineVector<n, T> {
   }
   fn realloc(&mut self) {
     unsafe {
+      self.heap_capacity *= 2;
       let layout =
       Layout::from_size_align_unchecked(
-        size_of::<T>() * self.heap_capacity as usize * 2,
+        size_of::<T>() * self.heap_capacity as usize,
         1);
       let fresh_mem_ptr = alloc(layout) as *mut T;
       if self.heap as usize == usize::MAX { panic!("Where's heap, huh??") }
@@ -57,7 +58,6 @@ impl <const n : usize, T> InlineVector<n, T> {
           size_of::<T>() * self.heap_capacity as usize,
           1));
       self.heap = fresh_mem_ptr;
-      self.heap_capacity *= 2;
     }
   }
   pub fn append(&mut self, new_item: T) {
@@ -82,11 +82,11 @@ impl <const n : usize, T> InlineVector<n, T> {
     unsafe { *self.heap.add(index) = new_item };
     self.ptr += 1;
   }
-  pub fn get_ref(&self, index: u32) -> &T {
-    assert!(index < self.ptr);
-    if (index as usize) < n {
+  pub fn get_ref(&self, index: usize) -> &T {
+    assert!(index < self.ptr as usize);
+    if (index) < n {
       return unsafe {
-        self.stack.get_unchecked(index as usize).assume_init_ref() };
+        self.stack.get_unchecked(index).assume_init_ref() };
     };
     return unsafe {
       &*self.heap.add(index as usize - n) };
@@ -177,7 +177,7 @@ impl <const n : usize, T> InlineVector<n, T> where T: Copy {
 impl <const n : usize, T> InlineVector<n, T> where T: Clone {
   fn clone_content_into(&self, recepient: *mut T) {
     for i
-    in 0 .. if  self.ptr as usize <= n { self.ptr } else { n as u32 } {
+    in 0 .. if  self.ptr as usize <= n { self.ptr as usize } else { n } {
       let cloned_item = self.get_ref(i).clone();
       unsafe { recepient.add(i as usize).write(cloned_item) };
     }
@@ -208,7 +208,7 @@ impl <const n : usize, T> InlineVector<n, T> where T:Copy {
       return;
     }
     // do it bit by bit
-    for i in 0 .. end_index as u32 {
+    for i in 0 .. end_index {
       let item = self.get_ref(i);
       target.enqueue_item(*item);
     }

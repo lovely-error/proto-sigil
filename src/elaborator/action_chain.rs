@@ -123,6 +123,21 @@ impl ActionLink {
       (framed << MTD_SIZE) + LinkKind::FrameRequest as u64;
     return Self(tagged);
   }
+  pub fn make_autosized_frame_request<Frame>(
+    action_chain_head: ActionLink
+  ) -> Self {
+    let data_size = size_of::<Frame>();
+    let total_frame_size =
+      data_size + size_of::<TaskMetadata>();
+    return ActionLink::make_frame_request(match total_frame_size {
+      0 ..= 64 => DataFrameSize::AproxBytes64,
+      0 ..= 128 => DataFrameSize::AproxBytes128,
+      0 ..= 256 => DataFrameSize::AproxBytes256,
+      0 ..= 512 => DataFrameSize::AproxBytes512,
+      _ => panic!(
+        "Given object does not fit into biggest frame. ({} bytes)", data_size)
+    }, action_chain_head);
+  }
   pub fn project_gateway(&self)
   -> SomeSendableClosure<TaskHandle, Self> { unsafe {
     let ptr = self.0 >> MTD_SIZE;
@@ -153,7 +168,7 @@ impl ActionLink {
       0 ..= 128 => SlabSize::Bytes128,
       0 ..= 256 => SlabSize::Bytes256,
       0 ..= 512 => SlabSize::Bytes512,
-      _ => panic!("Too big size of environment")
+      _ => panic!("Attemp to capture environment that is too big. ({} bytes)", size_of::<T>())
     };
     let mem = handle.request_slab(slab_size);
     let ptr = mem.project_slab_ptr();
@@ -237,6 +252,7 @@ impl Task {
     self.action_chain.unmark_as_poller()
   }
 }
+
 
 pub struct TaskMetadata {
   pub await_counter: AtomicU32,

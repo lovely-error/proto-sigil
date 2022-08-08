@@ -57,7 +57,7 @@ pub fn check_static_shape(
 
           // also check head
         },
-        ConcretisedNodeRepr::Reference { ref_, origination } => {
+        ConcretisedNodeRepr::Reference { name: ref_, origination } => {
 
         },
         _ => {

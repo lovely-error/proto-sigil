@@ -150,18 +150,18 @@ fn concretise_expr(
         },
         _ if pattern_binders.contains(&symbol) => {
           checked_kind = ConcretisedNodeRepr::Reference {
-            ref_: symbol, origination: Origin::PatternBinding
+            name: symbol, origination: Origin::PatternBinding
           }
         },
         _ if context_symbols.contains(&symbol) => {
           checked_kind = ConcretisedNodeRepr::Reference {
-            ref_: symbol, origination: Origin::ContextBinding
+            name: symbol, origination: Origin::ContextBinding
           }
         },
         _ if global_symbols.check_out(&symbol) => {
           checked_kind = ConcretisedNodeRepr::Reference {
             origination: Origin::GlobalScope,
-            ref_: symbol
+            name: symbol
           }
         },
         _ => {
@@ -186,28 +186,45 @@ fn concretise_expr(
       let checked_args =
         arguments.cast::<ConcretisedNode>();
 
-      let origination: Origin;
-      match () {
-        _ if pattern_binders.contains(&root) => {
-          origination = Origin::PatternBinding
+      match root.materialise_name() {
+        "Either" => {
+          checked_kind = ConcretisedNodeRepr::Either(
+            checked_args.get_ptr(0),
+            checked_args.get_ptr(1)
+          )
         },
-        _ if context_symbols.contains(&root) => {
-          origination = Origin::ContextBinding
-        },
-        _ if global_symbols.check_out(&root) => {
-          origination = Origin::GlobalScope;
+        "Pair" => {
+          checked_kind = ConcretisedNodeRepr::Pair(
+            checked_args.get_ptr(0),
+            checked_args.get_ptr(1)
+          )
         },
         _ => {
-          let problem = ProblemReport {
-            kind: Kind::IrrelevantSymbol(root)
+          let origination: Origin;
+          match () {
+            _ if pattern_binders.contains(&root) => {
+              origination = Origin::PatternBinding
+            },
+            _ if context_symbols.contains(&root) => {
+              origination = Origin::ContextBinding
+            },
+            _ if global_symbols.check_out(&root) => {
+              origination = Origin::GlobalScope;
+            },
+            _ => {
+              let problem = ProblemReport {
+                kind: Kind::IrrelevantSymbol(root)
+              };
+              diagnostic_delegate.report_problem(problem);
+              return
+            }
+          }
+          checked_kind = ConcretisedNodeRepr::App {
+            root, arguments: checked_args, origination
           };
-          diagnostic_delegate.report_problem(problem);
-          return
         }
       }
-      checked_kind = ConcretisedNodeRepr::App {
-        root, arguments: checked_args, origination
-      };
+
     },
     RawNodeRepr::Wit { premises, conclusion } => {
       let ptr = premises.project_ptr();

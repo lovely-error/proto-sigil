@@ -49,7 +49,7 @@ pub fn check_context_use(
         diagnostic_service.report_problem(problem)
       }
     },
-    ConcretisedNodeRepr::Reference { ref_, .. } => {
+    ConcretisedNodeRepr::Reference { name: ref_, .. } => {
       encounted_items.remove(&ref_);
     },
     ConcretisedNodeRepr::App { root, arguments, .. } => {
