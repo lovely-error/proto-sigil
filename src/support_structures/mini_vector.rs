@@ -42,6 +42,7 @@ impl <const n : usize, T> InlineVector<n, T> {
   }
   fn realloc(&mut self) {
     unsafe {
+      let old_capacity = self.heap_capacity;
       self.heap_capacity *= 2;
       let layout =
       Layout::from_size_align_unchecked(
@@ -51,11 +52,11 @@ impl <const n : usize, T> InlineVector<n, T> {
       if self.heap as usize == usize::MAX { panic!("Where's heap, huh??") }
       copy_nonoverlapping(
         self.heap, fresh_mem_ptr,
-        self.heap_capacity as usize);
+        old_capacity as usize);
       dealloc(
         self.heap.cast(),
         Layout::from_size_align_unchecked(
-          size_of::<T>() * self.heap_capacity as usize,
+          size_of::<T>() * old_capacity as usize,
           1));
       self.heap = fresh_mem_ptr;
     }
