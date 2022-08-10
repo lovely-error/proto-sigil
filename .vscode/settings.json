@@ -7,5 +7,5 @@
   "lldb.dereferencePointers": true,
   "lldb.consoleMode": "commands",
   "lldb.showDisassembly": "auto",
-  "lldb.displayFormat": "auto",
+  "lldb.displayFormat": "hex",
 }

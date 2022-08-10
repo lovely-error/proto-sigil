@@ -5,6 +5,7 @@ use std::{
   intrinsics::{transmute,},
 };
 
+const MAXIMUM_FPTR_BITWIDTH : u64 = 48;
 
 pub struct LocalClosure<Env, I, O>
 (Env, fn (&mut Env, I) -> O);
@@ -34,11 +35,11 @@ impl <X, Y, I> DetachedClosure<X, Y, I> {
     (self.0 >> 1) as *mut ()
   }
   fn project_action_ptr(&self) -> *mut () {
-    (self.1 & ((1 << 40) - 1)) as *mut ()
+    (self.1 & ((1 << MAXIMUM_FPTR_BITWIDTH) - 1)) as *mut ()
   }
   fn project_destructor_ptr(&self) -> *mut () {
-    let base = (self.1 & ((1 << 40) - 1)) as isize;
-    let offset = (self.1 >> 40) as isize;
+    let base = (self.1 & ((1 << MAXIMUM_FPTR_BITWIDTH) - 1)) as isize;
+    let offset = (self.1 >> MAXIMUM_FPTR_BITWIDTH) as isize;
     let dctor_ptr = (base + offset) as usize;
     return dctor_ptr as *mut ();
   }
@@ -109,11 +110,18 @@ impl <X, Y, I> DetachedClosure<X, Y, I> {
         size_of::<X>(), align_of::<X>()));
       mem.cast::<X>().write(env);
       let fun_ = fun as *mut u8;
+      let fun_addr = fun_ as u64;
+      if fun_addr > (1 << MAXIMUM_FPTR_BITWIDTH) - 1 as u64 {
+        panic!("Address of a function is too far away. ({:#x})", fun_addr);
+      }
       let dctor = Self::dctor as *mut u8;
       let ptr_diff = dctor.offset_from(fun_);
-      let ptr_diff = (ptr_diff << 40) as u64;
+      if ptr_diff > i16::MAX as isize || ptr_diff < i16::MIN as isize {
+        panic!("Cannot place destructor close enough to the function.");
+      }
+      let ptr_diff = (ptr_diff << MAXIMUM_FPTR_BITWIDTH) as u64;
       let mem = (mem as u64) << 1;
-      let procs = (fun as u64) + ptr_diff;
+      let procs = fun_addr + ptr_diff;
       return Self(mem, procs, PhantomData)
     } else {
       return Self(0, fun as u64, PhantomData)
@@ -163,11 +171,11 @@ impl CommonClosureRepr {
     (self.0 >> 1) as *mut ()
   }
   fn project_action_ptr(&self) -> *mut () {
-    (self.1 & ((1 << 40) - 1)) as *mut ()
+    (self.1 & ((1 <<MAXIMUM_FPTR_BITWIDTH) - 1)) as *mut ()
   }
   fn project_destructor_ptr(&self) -> *mut () {
-    let base = (self.1 & ((1 << 40) - 1)) as isize;
-    let offset = (self.1 >> 40) as isize;
+    let base = (self.1 & ((1 << MAXIMUM_FPTR_BITWIDTH) - 1)) as isize;
+    let offset = (self.1 >> MAXIMUM_FPTR_BITWIDTH) as isize;
     let dctor_ptr = (base + offset) as usize;
     return dctor_ptr as *mut ();
   }
