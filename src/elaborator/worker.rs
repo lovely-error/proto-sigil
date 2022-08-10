@@ -1,5 +1,4 @@
 
-
 use std::{
   thread::{JoinHandle, spawn, park, yield_now},
   sync::{
@@ -152,7 +151,7 @@ fn task_processor_runloop
     queue_ref.with_acquired_queue(|queue| { unsafe {
 
       let did_produce_work =
-          !spawned_subtasks.is_empty() || !pending_tasks.is_empty();
+        !spawned_subtasks.is_empty() || !pending_tasks.is_empty();
       if queue.is_empty() {
         if did_produce_work { should_ping_threads = true; }
 
@@ -425,6 +424,48 @@ impl WorkGroupRef {
     addr_of_mut!(data.executors).write(threads);
     return WorkGroupRef(transmute(wg));
   } }
+  pub fn init2(work_graph: ActionLink) -> WorkGroupRef {
+    unsafe {
+      let core_ids = core_affinity::get_core_ids();
+      if let None = core_ids {
+        panic!("Failed to get core ids");
+      };
+      let core_ids = core_ids.unwrap();
+      let core_count = core_ids.len() as u16;
+      let mut wg =
+        Box::<MaybeUninit<WorkGroup>>::new(MaybeUninit::uninit());
+      let data = &mut *wg.as_mut_ptr() ;
+      data.was_signaled_to_stop.store(false, Ordering::Relaxed);
+      data.liveness_count.store(core_count, Ordering::Relaxed);
+      let q_ptr = addr_of_mut!(data.task_queue);
+      let mut threads = Vec::<JoinHandle<()>>::new();
+      threads.reserve(core_count as usize);
+      q_ptr.write(WorkQueue::init_new());
+      let initial_task = Task::init(
+        MemorySlabControlItem::init_null(),
+        work_graph);
+      wg.assume_init_mut().task_queue.with_acquired_queue(|queue|{
+        queue.enqueue_item(initial_task);
+      });
+      // maybe it is reasonable to start threads with little relative
+      // time difference rather then all at once?
+      fence(Ordering::Release);
+      for core_id in core_ids {
+        let queue_ref = &mut *q_ptr ;
+        let stop_flag_ref = &data.was_signaled_to_stop;
+        let threads_ptr = addr_of_mut!(data.executors) as usize;
+        let lc = &data.liveness_count;
+        let thread = spawn(move || {
+          core_affinity::set_for_current(core_id);
+          task_processor_runloop::<4>(
+            stop_flag_ref, queue_ref,
+            threads_ptr as *mut _, lc);
+        });
+        threads.push(thread);
+      }
+      addr_of_mut!(data.executors).write(threads);
+      return WorkGroupRef(transmute(wg));
+    } }
   pub fn await_completion(self) {
     yield_now(); // most likely a good descision
     for thread in self.0.executors {
