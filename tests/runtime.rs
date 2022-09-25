@@ -1,6 +1,7 @@
-use std::{sync::atomic::{AtomicU64, Ordering, AtomicBool}, ptr::addr_of_mut};
+use std::{sync::atomic::{AtomicU64, Ordering, AtomicBool}, ptr::addr_of_mut, time::SystemTime};
 
-use proto_sigil::elaborator::{action_chain::{TaskHandle, ActionLink, DataFrameSize}, worker::WorkGroupRef};
+use proto_sigil::elaborator::{
+  action_chain::{TaskContext, ActionLink,}, worker::WorkGroup, frame_allocator::SlabSize};
 
 use proto_sigil::{
   support_structures::no_bullshit_closure::DetachedClosure,
@@ -13,39 +14,43 @@ use proto_sigil::{
 fn massive_spawn () {
 
   const LIMIT : u64 = 100_000;
-  struct Ctx { pub counter: AtomicU64 }
-  fn bump(tf : TaskHandle) -> ActionLink {
-    let par = tf.get_parrent_frame().unwrap();
+  struct Ctx { pub counter: AtomicU64, pub start_time: SystemTime }
+  fn bump(ctx : TaskContext) -> ActionLink {
+    let par = ctx.get_parrent_frame().unwrap();
     let ctx = par.interpret_frame::<Ctx>();
     let _ = ctx.counter.fetch_add(1, Ordering::Relaxed);
+    ctx.start_time = SystemTime::now();
     return ActionLink::make_completion();
   }
-  fn done(tf : TaskHandle) -> ActionLink {
-    let ctx = tf.interpret_frame::<Ctx>();
+  fn done(ctx : TaskContext) -> ActionLink {
+    let ctx = ctx.interpret_frame::<Ctx>();
     println!("{}", ctx.counter.load(Ordering::Relaxed));
+    let time_pased = ctx.start_time.elapsed().unwrap();
+    println!("Passed since start: {:?} micros", time_pased.as_micros());
+    println!("Passed since start: {:?} nanos", time_pased.as_nanos());
     assert_eq!(ctx.counter.load(Ordering::Relaxed), LIMIT);
     return ActionLink::make_completion();
   }
-  fn begin(handle : TaskHandle) -> ActionLink {
-    let ctx = handle.interpret_frame::<Ctx>();
-    ctx.counter = AtomicU64::new(0);
+  fn begin(ctx : TaskContext) -> ActionLink {
+    let frame = ctx.interpret_frame::<Ctx>();
+    frame.counter = AtomicU64::new(0);
     for _ in 0 .. LIMIT {
       let work_item =
-        ActionLink::goto(bump);
-      let framed = ActionLink::make_frame_request(DataFrameSize::AproxBytes64, work_item);
-      handle.assign_work_for_schedule(framed);
+        ActionLink::from_fun(bump);
+      let framed = ActionLink::make_frame_request(SlabSize::Bytes64, work_item);
+      ctx.assign_work_for_schedule(framed);
     };
-    return ActionLink::goto(done);
+    return ActionLink::from_fun(done);
   }
 
   let init =
-    ActionLink::goto(begin);
+    ActionLink::from_fun(begin);
   let work_graph =
     ActionLink::make_frame_request(
-      DataFrameSize::AproxBytes128, init);
+      SlabSize::Bytes128, init);
 
   // let start = SystemTime::now();
-  let w = WorkGroupRef::init(6, work_graph);
+  let w = WorkGroup::init(work_graph);
   w.await_completion();
   // let finish = SystemTime::now();
   // let diff =
@@ -59,12 +64,12 @@ fn gateway_is_ok () {
   struct Ctx { str: String }
   fn make_task(str: String) -> ActionLink {
     let gw =
-    detached!([str] | tf:TaskHandle | {
+    detached!([str] | tf:TaskContext | {
       let frame = tf.interpret_frame::<Ctx>();
       unsafe { addr_of_mut!(frame.str).write(str) };
-      return ActionLink::goto( read);
+      return ActionLink::from_fun( read);
     });
-    fn read(tf : TaskHandle) -> ActionLink {
+    fn read(tf : TaskContext) -> ActionLink {
       let frame = tf.interpret_frame::<Ctx>();
       println!("{}", frame.str);
       assert!(frame.str == "yo");
@@ -73,13 +78,13 @@ fn gateway_is_ok () {
     let cont =
       ActionLink::make_gateway(gw.erase_to_sendable());
     let framed = ActionLink::make_frame_request(
-      DataFrameSize::AproxBytes64, cont);
+      SlabSize::Bytes128, cont);
     return framed;
   }
 
   let task = make_task("yo".to_string());
 
-  let w = WorkGroupRef::init(1, task);
+  let w = WorkGroup::init(task);
   w.await_completion();
 
 }
@@ -88,7 +93,7 @@ fn gateway_is_ok () {
 #[test]
 fn children_see_parrents() {
   struct Ctx { str: String, done: AtomicBool }
-  fn step2(tf : TaskHandle) -> ActionLink {
+  fn step2(tf : TaskContext) -> ActionLink {
     let pf = tf.get_parrent_frame().unwrap();
     let parent_frame = pf.interpret_frame::<Ctx>();
     //println!("{}", parent_frame.str);
@@ -96,31 +101,69 @@ fn children_see_parrents() {
     parent_frame.done.store(true, Ordering::Relaxed);
     return ActionLink::make_completion();
   }
-  fn step1(tf : TaskHandle) -> ActionLink { unsafe {
+  fn step1(tf : TaskContext) -> ActionLink { unsafe {
     let frame = tf.interpret_frame::<Ctx>();
     addr_of_mut!(frame.str).write(String::new());
     frame.str.push_str("I do exist!");
     frame.done = AtomicBool::new(false);
 
-    let p = ActionLink::goto(step2);
+    let p = ActionLink::from_fun(step2);
     let p = ActionLink::make_frame_request(
-        DataFrameSize::AproxBytes64, p);
+        SlabSize::Bytes128, p);
     tf.assign_work_for_schedule(p);
 
     return p;
   } }
 
   let ptr =
-    ActionLink::goto( step1);
+    ActionLink::from_fun( step1);
   let ptr = ActionLink::make_frame_request(
-    DataFrameSize::AproxBytes64, ptr);
+    SlabSize::Bytes128, ptr);
 
   // let start = SystemTime::now();
-  let w = WorkGroupRef::init(1, ptr);
+  let w = WorkGroup::init(ptr);
   w.await_completion();
   // let finish = SystemTime::now();
   // let diff =
     // finish.duration_since(start).unwrap();
   // println!("Micros : {}", diff.as_micros());
 
+}
+
+#[test]
+fn well_sequenced_loops () {
+  static mut VAL : u8 = 0;
+  static mut MSG : String = String::new();
+  fn loop_ (ctx: TaskContext) -> ActionLink {
+    unsafe { MSG.push_str("Tick")};
+    ctx.assign_work_for_schedule(ActionLink::make_task_local_closure(&ctx, (), |_, _| {
+      unsafe {
+        MSG.push_str("Tock");
+        VAL += 1;
+      };
+      return ActionLink::make_completion();
+    }));
+    if unsafe { VAL == 5 } {
+      return ActionLink::from_fun(end);
+    } else {
+      return ActionLink::from_fun(loop_);
+    }
+  }
+  fn end (_ : TaskContext) -> ActionLink {
+    unsafe {
+      MSG.push_str("BOOM!!");
+    };
+    return ActionLink::make_completion();
+  }
+
+  let ptr =
+    ActionLink::from_fun(loop_);
+  let memed =
+  ActionLink::make_autosized_frame_request::<()>(ptr);
+  let exec = WorkGroup::init(memed);
+  exec.await_completion();
+
+  assert!(
+    "TickTockTickTockTickTockTickTockTickTockTickTockBOOM!!" ==
+    unsafe { &MSG })
 }

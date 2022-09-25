@@ -33,7 +33,7 @@ pub fn concretise_declaration(
 
       let ptr = rewrite_rules.project_ptr();
       let lim = rewrite_rules.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let ptr = unsafe { ptr.add(i) };
         concretise_rewrite_rule(
           ptr, diagnostic_delegate,
@@ -100,7 +100,7 @@ fn concretise_expr(
     let ptr = ctx.project_ptr();
     let lim = ctx.project_count();
 
-    for i in 0 .. lim {
+    for i in 0 .. lim  as usize {
       let (symbol, _) = unsafe { *ptr.add(i) };
       if context_symbols.contains(&symbol) {
         duplicated_imp_ctx_items.insert(symbol);
@@ -114,7 +114,7 @@ fn concretise_expr(
       };
       diagnostic_delegate.report_problem(problem)
     }
-    for i in 0 .. lim {
+    for i in 0 .. lim as usize {
       let (_, expr) = unsafe { &mut *ptr.add(i) };
       if let Some(expr) = expr {
         concretise_expr(
@@ -177,7 +177,7 @@ fn concretise_expr(
 
       let ptr = arguments.project_ptr();
       let lim = arguments.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let ptr = unsafe { ptr.add(i) };
         concretise_expr(
           ptr, diagnostic_delegate,
@@ -229,7 +229,7 @@ fn concretise_expr(
     RawNodeRepr::Wit { premises, conclusion } => {
       let ptr = premises.project_ptr();
       let lim = premises.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize{
         let ptr = unsafe { ptr.add(i) };
         concretise_expr(
           ptr, diagnostic_delegate,
@@ -253,7 +253,7 @@ fn concretise_expr(
       let mut head_names = context_symbols.clone();
       let mut duplicated_binders = HashSet::new();
       let mut does_perform_introspection = false;
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize{
         let ptr = unsafe { ptr.add(i) };
         let (name, _) = unsafe { *ptr };
         if let Some(name) = name {
@@ -271,7 +271,7 @@ fn concretise_expr(
         diagnostic_delegate.report_problem(problem)
       }
 
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize{
         let ptr = unsafe { ptr.add(i) };
         let (_, node) = unsafe { &mut *ptr };
         concretise_expr(
@@ -302,7 +302,7 @@ fn concretise_expr(
     RawNodeRepr::Lam { rewrite_rules } => {
       let ptr = rewrite_rules.project_ptr();
       let lim = rewrite_rules.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize{
         let ptr = unsafe { ptr.add(i) };
         concretise_rewrite_rule(
           ptr, diagnostic_delegate, global_symbols, context_symbols, pattern_binders)
@@ -336,7 +336,7 @@ fn concretise_rewrite_rule(
   let mut duplicated_binders = HashSet::new();
   let ptr = matchers.project_ptr();
   let count = matchers.project_count();
-  for i in 0 .. count {
+  for i in 0 .. count as usize{
     let ptr = unsafe { ptr.add(i) };
     concretise_pattern(
       ptr, diagnostic_delegate,
@@ -383,7 +383,7 @@ fn concretise_pattern(
 
       let ptr = subexpressions.project_ptr();
       let lim = subexpressions.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize{
         let ptr = unsafe { ptr.add(i) };
         concretise_pattern(
           ptr, diagnostic_delegate,

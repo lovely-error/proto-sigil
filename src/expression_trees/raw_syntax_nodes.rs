@@ -14,7 +14,7 @@ pub trait Locatable {
 #[derive(Clone, Copy, Debug)]
 pub struct SourceLocation {
   pub primary_offset: u32,
-  pub secondary_offset: u16
+  pub secondary_offset: u32
 }
 
 #[repr(u8)] #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,39 +74,6 @@ impl ExprPtr {
 }
 
 
-// All nontrivial nodes have same layout: 64 bytes
-pub type GenericNodeData = [u64 ; 8];
-
-#[derive(Debug, Copy, Clone)]
-pub struct AppNodeArgsInline {
-  pub name: Symbol,
-  pub sloc_data: SourceLocation,
-  pub ctx_ptr: RawCtxPtr,
-  pub args: [ExprPtr ; 2],
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct AppNodeIndirectSmall {
-  pub name: Symbol,
-  pub sloc_data: SourceLocation,
-  pub args: SomeEntangledPtr,
-  pub ctx_ptr: RawCtxPtr,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct RefNode {
-  pub name: Symbol,
-  pub ctx_ptr: RawCtxPtr,
-}
-
-
-pub struct AppNodeVec {
-  pub name: Symbol,
-  pub args: Vec<ExprPtr>,
-}
-
-
-
 #[repr(u8)]
 pub enum PatternKind {
   Wildcard, Compound_Inlined, Compound_Indirect, Compound_Huge, Singular
@@ -155,17 +122,6 @@ impl PatternExprPtr {
   }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CompoundPatternNode_ArgsInline {
-  pub name: Symbol,
-  pub args: [PatternExprPtr ; 4]
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct CompoundPatternNode_ArgsIndiSlab {
-  pub name: Symbol,
-  pub args: SomeEntangledPtr
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct RefPatternNode {

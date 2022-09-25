@@ -41,7 +41,7 @@ pub fn check_rewrite_system(
     for column in 0 .. arity {
       let mut root = BindSynthTypeShape::Variable;
 
-      for row in 0 .. lim {
+      for row in 0 .. lim as usize {
         let rule = unsafe { *ptr.add(row) };
         let matcher = unsafe {
           *rule.matchers.project_ptr().add(column)
@@ -73,7 +73,7 @@ impl ConcretisedNode {
       let count = head.project_count();
       arity += count ;
     }
-    return arity
+    return arity as usize
   }
 }
 

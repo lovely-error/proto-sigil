@@ -1,11 +1,9 @@
 use std::{
-  marker::PhantomData, intrinsics::transmute, hash::Hash,
-  mem::size_of
+  marker::PhantomData, intrinsics::transmute, hash::Hash
 };
 
 use crate::{
-  support_structures::homemade_slice::Slice,
-  parser::node_allocator::EntagledPtr
+  support_structures::{homemade_slice::Slice, tagged_ptr::TaggedPtr},
 };
 
 use super::raw_syntax_nodes::SourceLocation;
@@ -46,36 +44,34 @@ impl Symbol {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ArrayPtr<T>(u64, PhantomData<T>);
+pub struct ArrayMtd {
+  pub length: u8
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArrayPtr<T>(pub TaggedPtr<ArrayMtd, T>, PhantomData<T>);
 impl <T> ArrayPtr<T> {
   pub fn init(ptr: *mut T, count: u8) -> Self {
-    let sized = ((ptr as u64) << 8) + count as u64;
-    return Self(sized, PhantomData)
+    let mtd = ArrayMtd { length: count };
+    return Self(TaggedPtr::init_from_ptr(mtd, ptr), PhantomData);
+  }
+  pub fn project_count(&self) -> u8 {
+    self.0.project_tag().length
   }
   pub fn project_ptr(&self) -> *mut T {
-    (self.0 >> 8) as *mut T
+    self.0.project_ptr()
   }
-  pub fn project_count(&self) -> usize {
-    (self.0 as u8) as usize
-  }
-  pub fn get_ptr(&self, index: usize) -> *mut T {
-    unsafe {
-      self.project_ptr().add(index) }
+  pub fn get_ptr(&self, index: u8) -> *mut T {
+    let ptr = self.project_ptr();
+    return unsafe { ptr.add(index as usize) };
   }
 }
 impl <T> ArrayPtr<T> where T: Copy {
   pub fn cast<K>(&self) -> ArrayPtr<K> {
     unsafe { transmute(*self) }
   }
-  pub fn for_each_value(&self, mut fun: impl FnMut(T)) {
-    let ptr = self.project_ptr();
-    let end_index = self.project_count();
-    for i in 0 .. end_index {
-      let node = unsafe { *ptr.add(i) };
-      fun(node)
-    }
-  }
 }
+
 
 #[repr(u8)] #[derive(Debug, Clone, Copy)]
 pub enum NodeKind {

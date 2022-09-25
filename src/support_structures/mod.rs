@@ -10,3 +10,5 @@ pub mod homemade_slice;
 pub mod fused_case;
 pub mod tagged_ptr;
 pub mod universal_bitwise_conversion;
+pub mod raw_array_iter;
+pub mod atomic_work_queue;

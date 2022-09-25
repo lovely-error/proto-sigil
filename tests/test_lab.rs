@@ -5,7 +5,7 @@ use std::{
   ptr::{null_mut, addr_of_mut}, hash::{Hash, Hasher}, collections::hash_map::DefaultHasher, path::PathBuf};
 
 use proto_sigil::{elaborator::{
-  worker::{WorkGroup, WorkGroupRef}, self,}, support_structures::universal_bitwise_conversion::bitcast,
+  worker::{WorkGroupSharedData, WorkGroup}, self,}, support_structures::universal_bitwise_conversion::bitcast,
 };
 
 
@@ -37,7 +37,7 @@ fn drop_on_ptrs () {
 
 //#[test]
 fn size_test () {
-  println!("{}", size_of::<Box<WorkGroup>>())
+  println!("{}", size_of::<Box<WorkGroupSharedData>>())
 }
 
 
@@ -108,7 +108,7 @@ fn count_ones () {
 fn par () {
   let path = PathBuf::from("/Users/cromobeingnur/testim_sigi");
   let wg = elaborator::main::elab_invocation_setup(path);
-  let executor = WorkGroupRef::init(6, wg);
+  let executor = WorkGroup::init(wg);
   executor.await_completion();
 }
 

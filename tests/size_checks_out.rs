@@ -2,8 +2,7 @@
 use std::{mem::{size_of, ManuallyDrop}, intrinsics::transmute, ptr::addr_of_mut};
 
 use proto_sigil::{
-  expression_trees::{raw_syntax_nodes::{
-    AppNodeArgsInline, AppNodeVec, LiftNodeItem, ExprPtr,
+  expression_trees::{raw_syntax_nodes::{LiftNodeItem, ExprPtr,
   }, better_nodes::{RawNode, ConcretisedNode, Symbol, }},
 
   elaborator::{
@@ -24,20 +23,6 @@ fn size_of_expr_ptr () {
   assert!(size_of::<ExprPtr>() == 8)
 }
 
-#[test]
-fn size_test1 () {
-  let size = size_of::<AppNodeArgsInline>();
-  assert!(size <= 64);
-  println!("{}", size);
-}
-
-
-#[test]
-fn size_test2 () {
-  let size = size_of::<AppNodeVec>();
-  assert!(size <= 64);
-  println!("{}", size);
-}
 
 #[test]
 fn size_of_head_item_check () {

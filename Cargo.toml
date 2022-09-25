@@ -12,3 +12,7 @@ core_affinity = "0.5.10"
 [[bin]]
 name = "knot"
 path = "bin/cli/main.rs"
+
+[[bin]]
+name = "echo"
+path = "bin/echoer/main.rs"

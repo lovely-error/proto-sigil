@@ -5,7 +5,7 @@ use std::{
   ptr::{null_mut,},
   alloc::{Layout, alloc, dealloc}, mem::{size_of}};
 
-use super::action_chain::{TaskHandle, TaskMetadata};
+use super::action_chain::{TaskContext, TaskMetadata};
 
 
 #[repr(align(8))] #[derive(Debug, Clone, Copy)]
@@ -259,7 +259,7 @@ pub struct RCTaskBox<T> {
 }
 
 impl <T> RCTaskBox<T> {
-  pub fn init(handle: TaskHandle, value: T) -> Self {
+  pub fn init(handle: TaskContext, value: T) -> Self {
     unsafe {
       let size = match size_of::<(T, MemorySlabControlItem, u64)>() {
         0 ..= 64 => SlabSize::Bytes64,
@@ -278,7 +278,7 @@ impl <T> RCTaskBox<T> {
   pub fn get_ref(&self) -> &T { unsafe {
     &*self.storage_ptr.cast::<u64>().add(2).cast::<T>()
   } }
-  pub fn try_unbox(self, handle: TaskHandle) -> Option<T> { unsafe {
+  pub fn try_unbox(self, handle: TaskContext) -> Option<T> { unsafe {
     let (_, mci, rc) = &*self.storage_ptr;
     if *rc == 0 {
       let val = self.storage_ptr.cast::<T>().read();

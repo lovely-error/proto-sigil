@@ -1,4 +1,4 @@
-use crate::support_structures::homemade_slice::Slice;
+use crate::support_structures::{homemade_slice::Slice, raw_array_iter::RawArrayIter};
 
 use super::{
   better_nodes::{
@@ -21,45 +21,45 @@ pub fn render_expr_tree(expr: RawNode, output: &mut String) {
       output.push_str("(");
       write_symbol(root, output);
       output.push_str(" [");
-      arguments.for_each_value(|node|{
+      for node in RawArrayIter::from_array_ptr(arguments) {
         render_expr_tree(node, output);
         output.push_str(", ");
-      });
+      }
       output.push_str("])")
     },
     RawNodeRepr::Wit { premises, conclusion } => {
       output.push_str("[| ");
-      premises.for_each_value(|node|{
+      for node in RawArrayIter::from_array_ptr(premises) {
         render_expr_tree(node, output);
         output.push(',');
-      });
+      }
       output.push_str(" ; ");
       render_expr_tree(unsafe { *conclusion }, output);
       output.push_str(" |]");
     },
     RawNodeRepr::Fun { head, spine } => {
       output.push('(');
-      head.for_each_value(|(name, expr)|{
+      for (name, expr) in RawArrayIter::from_array_ptr(head) {
         if let Some(symbol) = name {
           write_symbol(symbol, output);
           output.push_str(" : ");
         }
         render_expr_tree(expr, output);
         output.push_str(", ")
-      });
+      }
       output.push_str(") -> ");
       render_expr_tree(unsafe { *spine }, output);
     },
     RawNodeRepr::Sigma { head, spine } => {
       output.push('(');
-      head.for_each_value(|(name, expr)|{
+      for (name, expr) in RawArrayIter::from_array_ptr(head) {
         if let Some(symbol) = name {
           write_symbol(symbol, output);
           output.push_str(" : ");
         }
         render_expr_tree(expr, output);
         output.push_str(", ")
-      });
+      }
       output.push_str(") |- ");
       render_expr_tree(unsafe { *spine }, output);
     },

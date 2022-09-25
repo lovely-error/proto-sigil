@@ -9,7 +9,7 @@ use crate::elaborator::worker::LoopQueue;
 
 
 #[derive(Debug)]
-pub struct InlineVector<const stack_size : usize, Item> {
+pub struct InlineVector <const stack_size : usize, Item> {
   pub(crate) stack: [MaybeUninit<Item> ; stack_size],
   pub(crate) heap: *mut Item,
   ptr: u32,
@@ -61,7 +61,7 @@ impl <const n : usize, T> InlineVector<n, T> {
       self.heap = fresh_mem_ptr;
     }
   }
-  pub fn append(&mut self, new_item: T) {
+  pub fn push(&mut self, new_item: T) {
     if (self.ptr as usize) < n {
       unsafe {
         self.stack
@@ -95,8 +95,8 @@ impl <const n : usize, T> InlineVector<n, T> {
   pub fn is_empty(&self) -> bool {
     return self.ptr == 0;
   }
-  pub fn count_items(&self) -> u32 {
-    return self.ptr
+  pub fn count_items(&self) -> usize {
+    return self.ptr as usize
   }
   pub fn did_allocate_on_heap(&self) -> bool {
     return self.heap as usize != usize::MAX;
@@ -161,22 +161,9 @@ impl <const n : usize, T> Drop for InlineVector<n, T> {
   } }
 }
 
-impl <const n : usize, T> InlineVector<n, T> where T: Copy {
-  fn copy_content_into(&self, recepient: *mut T) { unsafe {
-    copy_nonoverlapping(
-      self.stack.as_ptr(), recepient.cast(),
-      if self.ptr as usize <= n { self.ptr as usize } else { n });
-    if self.did_allocate_on_heap() {
-      copy_nonoverlapping(
-        self.heap,
-        recepient.add(n),
-        self.ptr as usize - n);
-    }
-  } }
-}
 
 impl <const n : usize, T> InlineVector<n, T> where T: Clone {
-  fn clone_content_into(&self, recepient: *mut T) {
+  fn copy_content_into(&self, recepient: *mut T) {
     for i
     in 0 .. if  self.ptr as usize <= n { self.ptr as usize } else { n } {
       let cloned_item = self.get_ref(i).clone();
@@ -224,6 +211,6 @@ pub trait SomeInlineVector {
 impl <const n : usize, T> SomeInlineVector for InlineVector<n, T> {
   type Item = T;
   fn push(&mut self, item: Self::Item) {
-    self.append(item)
+    self.push(item)
   }
 }

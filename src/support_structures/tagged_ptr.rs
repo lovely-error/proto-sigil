@@ -1,7 +1,7 @@
 
-use std::{marker::PhantomData, mem::{size_of, MaybeUninit},};
+use std::{marker::PhantomData, mem::{size_of, transmute},};
 
-
+#[derive(Debug)]
 pub struct TaggedPtr<Tag: Copy, PointedValue>
   (u64, PhantomData<(Tag, PointedValue)>);
 
@@ -57,5 +57,18 @@ impl <T: Copy, P> TaggedPtr<T, P> {
     val.value = tag ;
     self.0 = unsafe { val.bits };
   }
+  pub fn cast<K>(&self) -> TaggedPtr<T, K> {
+    unsafe { transmute(*self) }
+  }
 }
 
+impl <T: Copy, V: Clone> TaggedPtr<T, V> {
+  pub unsafe fn deref(&self) -> V {
+    (&*self.project_ptr()).clone()
+  }
+}
+
+impl <T: Copy, V> Copy for TaggedPtr<T, V> {}
+impl <T: Copy, V> Clone for TaggedPtr<T, V> {
+  fn clone(&self) -> Self { *self }
+}

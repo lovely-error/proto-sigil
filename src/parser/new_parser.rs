@@ -215,7 +215,7 @@ impl ParsingState {
   }
   pub fn end_sloc(&self, initial_loc: TempSlocInfo) -> SourceLocation {
     SourceLocation { primary_offset: initial_loc.primary_offset,
-                     secondary_offset: self.byte_index as u16 }
+                     secondary_offset: self.byte_index as u32 }
   }
   pub fn accept_first_parse
   <const N : usize, T>(&mut self, opts: [impl FnOnce(&mut Self) -> Maybe<T> ; N])
@@ -324,7 +324,7 @@ impl ParsingState {
         self.skip_trivia();
         let subexpr =
           self.parse_expr(root_indentation_depth)?;
-        subexprs.append(subexpr);
+        subexprs.push(subexpr);
         guard! {
           self.prefix_match(")", true) =>
             self.fail_with(ParseErrorKind::UnterminatedSubexpr)
@@ -339,7 +339,7 @@ impl ParsingState {
         kind: RawNodeRepr::Ref(terminal_subexpr),
         location: terminal_subexpr.location
       };
-      subexprs.append(node);
+      subexprs.push(node);
     };
 
     let loc = self.end_sloc(loc);
@@ -377,10 +377,10 @@ impl ParsingState {
       if self.prefix_match(":", true) {
         let indent = self.probe_depth();
         let expr = self.parse_expr(indent)?;
-        items.append((sym, Some(expr)));
+        items.push((sym, Some(expr)));
         self.skip_trivia();
       } else {
-        items.append((sym, None));
+        items.push((sym, None));
       }
       match () {
         _ if self.prefix_match(",", true) => continue,
@@ -410,7 +410,7 @@ impl ParsingState {
     loop {
       let depth = self.probe_depth();
       let expr = self.parse_expr(depth)?;
-      premises.append(expr);
+      premises.push(expr);
       self.skip_trivia();
       match () {
         _ if self.prefix_match(",", true) => continue,
@@ -466,10 +466,10 @@ impl ParsingState {
         let _ = self.prefix_match(":", true);
         let depth = self.probe_depth();
         let expr = self.parse_expr(depth)?;
-        items.append((Some(ref_), expr));
+        items.push((Some(ref_), expr));
       } else {
         let indeed_expr = maybe_expr;
-        items.append((None, indeed_expr));
+        items.push((None, indeed_expr));
       }
       self.skip_trivia();
       match () {
@@ -534,7 +534,7 @@ impl ParsingState {
     loop {
       let clause =
         self.parse_clause(depth)?;
-      clauses.append(clause);
+      clauses.push(clause);
       depth = self.probe_depth();
       if self.prefix_match("}", true) { break; }
     }
@@ -567,7 +567,7 @@ impl ParsingState {
     loop {
       self.skip_trivia();
       let pattern = self.parse_pattern()?;
-      patterns.append(pattern);
+      patterns.push(pattern);
       self.skip_trivia();
       if self.prefix_match(",", true) {
         continue; }
@@ -615,7 +615,7 @@ impl ParsingState {
       if self.prefix_match("(", true) {
         self.skip_trivia();
         let sub_pat = self.parse_pattern()?;
-        args.append(sub_pat);
+        args.push(sub_pat);
         self.skip_trivia();
         guard! {
           self.prefix_match(")", true)
@@ -630,7 +630,7 @@ impl ParsingState {
         location: terminal_pat.location ,
         repr: RawPatternKind::Mono(terminal_pat)
       };
-      args.append(subexpr);
+      args.push(subexpr);
     }
     let loc = self.end_sloc(loc);
     if args.is_empty() {
@@ -674,7 +674,7 @@ impl ParsingState {
       depth = self.probe_depth();
       let value = self.parse_expr(depth)?;
       let value_ = self.allocate(value);
-  
+
       let def_decl = Declaration {
         repr: DeclKind::RawDefinition { name, given_type: type__, value: value_ },
         participate_in_cycle_formation: false
@@ -690,7 +690,7 @@ impl ParsingState {
       loop {
         let clause =
           self.parse_clause(depth)?;
-        clauses.append(clause);
+        clauses.push(clause);
         depth = self.probe_depth();
         if self.prefix_match("|", false) { continue; }
         else { self.byte_index -= depth as usize; break; }

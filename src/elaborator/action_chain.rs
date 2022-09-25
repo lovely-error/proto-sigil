@@ -16,19 +16,15 @@ pub enum LinkKind {
   Step, Completion, FrameRequest,
   Gateway, TaskLocalClosure
 }
-#[repr(u8)] #[derive(Debug, Clone, Copy)]
-pub enum DataFrameSize {
-  Absent, AproxBytes128, AproxBytes256, AproxBytes512, AproxBytes64
-}
 
 
-pub struct TaskHandle(
+pub struct TaskContext(
   pub(super) *mut dyn SomeInlineVector<Item = Task>,
   pub(super) MemorySlabControlItem,
   pub(super) *mut GranularSlabAllocator,
   pub(super) *mut u32);
 
-impl TaskHandle {
+impl TaskContext {
   pub fn assign_work_for_schedule(&self, item: ActionLink) {
     let task =
       Task::init(self.1, item);
@@ -106,7 +102,7 @@ const IS_POLLER : u64 = 1 << LINK_TAG_SIZE;
 pub struct ActionLink(u64);
 impl ActionLink {
   pub fn make_gateway(
-    closure: SomeSendableClosure<TaskHandle, Self>
+    closure: SomeSendableClosure<TaskContext, Self>
   ) -> Self {
     let boxed_clos = Box::new(closure);
     let mut gateway_ptr = unsafe { transmute::<_, u64>(boxed_clos) };
@@ -115,7 +111,7 @@ impl ActionLink {
     return link;
   }
   pub fn make_frame_request(
-    frame_size: DataFrameSize,
+    frame_size: SlabSize,
     action_chain_head: ActionLink
   ) -> Self {
     let framed = (action_chain_head.0 << 4) + frame_size as u64;
@@ -130,21 +126,21 @@ impl ActionLink {
     let total_frame_size =
       data_size + size_of::<TaskMetadata>();
     return ActionLink::make_frame_request(match total_frame_size {
-      0 ..= 64 => DataFrameSize::AproxBytes64,
-      0 ..= 128 => DataFrameSize::AproxBytes128,
-      0 ..= 256 => DataFrameSize::AproxBytes256,
-      0 ..= 512 => DataFrameSize::AproxBytes512,
+      0 ..= 64 => SlabSize::Bytes64,
+      0 ..= 128 => SlabSize::Bytes128,
+      0 ..= 256 => SlabSize::Bytes256,
+      0 ..= 512 => SlabSize::Bytes512,
       _ => panic!(
         "Given object does not fit into biggest frame. ({} bytes)", data_size)
     }, action_chain_head);
   }
   pub fn project_gateway(&self)
-  -> SomeSendableClosure<TaskHandle, Self> { unsafe {
+  -> SomeSendableClosure<TaskContext, Self> { unsafe {
     let ptr = self.0 >> MTD_SIZE;
     let gw =
       transmute::<
         _,
-        Box<SomeSendableClosure<TaskHandle, Self>>>
+        Box<SomeSendableClosure<TaskContext, Self>>>
       (ptr);
     return *gw;
   } }
@@ -154,13 +150,13 @@ impl ActionLink {
   pub fn make_completion() -> Self {
     return Self(LinkKind::Completion as u64);
   }
-  pub fn goto(fun_ptr: fn (TaskHandle) -> ActionLink) -> Self {
+  pub fn from_fun(fun_ptr: fn (TaskContext) -> ActionLink) -> Self {
     unsafe {
       Self((transmute::<_, u64>(fun_ptr) << MTD_SIZE)
       + LinkKind::Step as u64) }
   }
   pub fn make_task_local_closure<T>(
-    handle: &TaskHandle, env: T, fun: fn (*mut T, TaskHandle) -> ActionLink
+    context: &TaskContext, env: T, fun: fn (*mut T, TaskContext) -> ActionLink
   ) -> ActionLink {
     //type CellContent = (MemorySlabControlItem, T, );
     let slab_size = match size_of::<(MemorySlabControlItem, *mut (), T)>() {
@@ -168,9 +164,9 @@ impl ActionLink {
       0 ..= 128 => SlabSize::Bytes128,
       0 ..= 256 => SlabSize::Bytes256,
       0 ..= 512 => SlabSize::Bytes512,
-      _ => panic!("Attemp to capture environment that is too big. ({} bytes)", size_of::<T>())
+      _ => panic!("Capture is too big. ({} bytes)", size_of::<T>())
     };
-    let mem = handle.request_slab(slab_size);
+    let mem = context.request_slab(slab_size);
     let ptr = mem.project_slab_ptr();
     let ptr_ = ptr.cast::<(MemorySlabControlItem, *mut (), T)>();
     unsafe { ptr_.write((mem, fun as *mut (), env)) };
@@ -185,16 +181,16 @@ impl ActionLink {
   pub fn project_tag (&self) -> LinkKind {
     unsafe { transmute((self.0 as u8) & (LINK_TAG_MASK as u8)) }
   }
-  pub fn project_frame_size(&self) -> DataFrameSize {
+  pub fn project_frame_size(&self) -> SlabSize {
     let untagged = (self.0 as u8) >> MTD_SIZE;
     let frame = untagged & ((1 << 4) - 1);
     return unsafe { transmute(frame) }
   }
-  pub fn project_fun_ptr (&self) -> fn (TaskHandle) -> ActionLink {
+  pub fn project_fun_ptr (&self) -> fn (TaskContext) -> ActionLink {
     return unsafe { transmute(self.0 >> MTD_SIZE) }
   }
   pub fn project_progress_checker(&self)
-    -> fn (TaskHandle) -> Option<ActionLink> {
+    -> fn (TaskContext) -> Option<ActionLink> {
     return unsafe { transmute(self.0 >> MTD_SIZE) };
   }
   pub fn mark_as_poller(&mut self) {
@@ -238,7 +234,7 @@ impl Task {
   pub fn project_data_frame_ptr(&self) -> MemorySlabControlItem {
     self.data_frame_ptr
   }
-  pub fn project_func_ptr(&self) -> fn (TaskHandle) -> ActionLink {
+  pub fn project_func_ptr(&self) -> fn (TaskContext) -> ActionLink {
     return self.action_chain.project_fun_ptr();
   }
   pub fn reached_completion(&self) -> bool {

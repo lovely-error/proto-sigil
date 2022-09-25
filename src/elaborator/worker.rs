@@ -1,14 +1,14 @@
 
 use std::{
-  thread::{JoinHandle, spawn, park, yield_now},
+  thread::{JoinHandle, spawn, park, Thread, self},
   sync::{
     Mutex, atomic::{AtomicBool, Ordering, AtomicU16, fence}},
     mem::{MaybeUninit, size_of},
     ptr::addr_of_mut, intrinsics::{transmute},
     alloc::{Layout, alloc}};
 use crate::{elaborator::{
-  frame_allocator::{GranularSlabAllocator, SlabSize,},
-  action_chain::{DataFrameSize, TaskHandle,}},
+  frame_allocator::{GranularSlabAllocator,},
+  action_chain::{TaskContext,}},
   support_structures::mini_vector::InlineVector};
 
 use super::{
@@ -109,11 +109,12 @@ impl <T> WorkQueue<T> {
 }
 unsafe impl <T> Send for WorkQueue<T> {}
 
-pub struct WorkGroup {
-  executors: Vec<JoinHandle<()>>,
+pub struct WorkGroupSharedData {
+  delegated_executors: Vec<JoinHandle<()>>,
   task_queue: WorkQueue<Task>,
   was_signaled_to_stop: AtomicBool,
   liveness_count: AtomicU16,
+  initiator_thread: Thread,
 }
 
 
@@ -125,6 +126,7 @@ fn task_processor_runloop
   queue_ref: &mut WorkQueue<Task>,
   threads: *mut Vec<JoinHandle<()>>,
   liveness_count: &AtomicU16,
+  initiator_thread_handle: &Thread,
 ) {
   assert!(
     TASK_CACHE_SIZE <= u8::MAX as usize,
@@ -224,6 +226,9 @@ fn task_processor_runloop
         for thread_handle in unsafe {(&*threads).iter()} {
           thread_handle.thread().unpark()
         }
+        // this is the last thread alive.
+        // lets unpark the initiator of the workgroup!
+        initiator_thread_handle.unpark();
         break 'main
       },
       RetirementChoise::Continue => {},
@@ -242,19 +247,18 @@ fn task_processor_runloop
       num_of_spawned_subtasks = 0;
       'work : loop {
         let action = task.project_action_chain();
+        let local_data_frame = task.project_data_frame_ptr();
         if action.is_poller() {
-          let df_ptr = task.project_data_frame_ptr();
           let count =
-            df_ptr.project_metadata_mref()
+            local_data_frame.project_metadata_mref()
             .await_counter.load(Ordering::Relaxed);
           if count != 0 {
-            pending_tasks.append(*task);
+            pending_tasks.push(*task);
             break 'work;
           }
         }
-        let local_data_frame = task.project_data_frame_ptr();
         let task_handle =
-          TaskHandle(
+          TaskContext(
             &mut spawned_subtasks,
             local_data_frame,
             &mut task_frame_allocator,
@@ -266,23 +270,8 @@ fn task_processor_runloop
             task.inject_action_chain(link);
             // allocate task frame and set it for current task.
             let frame_request = action.project_frame_size();
-            let mem = match frame_request {
-              DataFrameSize::Absent => {
-                MemorySlabControlItem::init_null()
-              },
-              DataFrameSize::AproxBytes128 => {
-                task_frame_allocator.acquire_memory(SlabSize::Bytes128)
-              },
-              DataFrameSize::AproxBytes256 => {
-                task_frame_allocator.acquire_memory(SlabSize::Bytes256)
-              },
-              DataFrameSize::AproxBytes512 => {
-                task_frame_allocator.acquire_memory(SlabSize::Bytes512)
-              },
-              DataFrameSize::AproxBytes64 => {
-                task_frame_allocator.acquire_memory(SlabSize::Bytes64)
-              },
-            };
+            let mem =
+              task_frame_allocator.acquire_memory(frame_request);
             // put a ptr to a parrent frame into any child that
             // wants its own memory.
             // root of the task tree point to null
@@ -297,12 +286,13 @@ fn task_processor_runloop
 
             let continuation = work(task_handle);
             task.inject_action_chain(continuation);
+
             let mtd = local_data_frame.project_metadata_mref();
             mtd.await_counter.store(
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
               task.mark_as_poller();
-              pending_tasks.append(*task);
+              pending_tasks.push(*task);
               break 'work
             } else {
               continue 'work;
@@ -336,7 +326,7 @@ fn task_processor_runloop
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
               task.mark_as_poller();
-              pending_tasks.append(*task);
+              pending_tasks.push(*task);
               break 'work
             } else {
               continue 'work;
@@ -348,7 +338,7 @@ fn task_processor_runloop
             let (mem_ctrl, fn_ptr, _) =
               *clos_ptr.cast::<(MemorySlabControlItem, *mut (), ())>();
             let fun =
-              transmute::<_, fn (*mut (), TaskHandle) -> ActionLink>(fn_ptr) ;
+              transmute::<_, fn (*mut (), TaskContext) -> ActionLink>(fn_ptr) ;
             let env_ptr =
               clos_ptr.cast::<u64>().add(2).cast::<()>();
             let continuation =
@@ -362,7 +352,7 @@ fn task_processor_runloop
               num_of_spawned_subtasks, Ordering::Relaxed);
             if num_of_spawned_subtasks != 0 {
               task.mark_as_poller();
-              pending_tasks.append(*task);
+              pending_tasks.push(*task);
               break 'work
             } else {
               continue 'work;
@@ -373,58 +363,33 @@ fn task_processor_runloop
       index += 1;
       if index == limit {
         let len = spawned_subtasks.count_items() as usize;
-        if len > 0 && len <= TASK_CACHE_SIZE {
-          // can refill cache without going through queue
-          limit = len as u16; index = 0;
-          spawned_subtasks.move_content_into(task_cache.as_mut_ptr().cast::<Task>());
-          continue 'quantum;
+        if len > 0 {
+          if len <= TASK_CACHE_SIZE {
+            // can refill cache without going through queue
+            limit = len as u16; index = 0;
+            spawned_subtasks.move_content_into(task_cache.as_mut_ptr().cast::<Task>());
+            continue 'quantum;
+          }
         } else {
-          continue 'main;
+          let len = pending_tasks.count_items() as usize;
+          if len > 0 {
+            if len <= TASK_CACHE_SIZE {
+              limit = len as u16; index = 0;
+              pending_tasks.move_content_into(task_cache.as_mut_ptr().cast::<Task>());
+              continue 'quantum;
+            }
+          }
         }
+        continue 'main;
       }
     };
   };
 
 }
 
-pub struct WorkGroupRef(Box<WorkGroup>);
-impl WorkGroupRef {
-  pub fn init(thread_count: u16, work_graph: ActionLink) -> WorkGroupRef {
-  unsafe {
-    let mut wg =
-      Box::<MaybeUninit<WorkGroup>>::new(MaybeUninit::uninit());
-    let data = &mut *wg.as_mut_ptr() ;
-    data.was_signaled_to_stop.store(false, Ordering::Relaxed);
-    data.liveness_count.store(thread_count, Ordering::Relaxed);
-    let q_ptr = addr_of_mut!(data.task_queue);
-    let mut threads = Vec::<JoinHandle<()>>::new();
-    threads.reserve(thread_count as usize);
-    q_ptr.write(WorkQueue::init_new());
-    let initial_task = Task::init(
-      MemorySlabControlItem::init_null(),
-      work_graph);
-    wg.assume_init_mut().task_queue.with_acquired_queue(|queue|{
-      queue.enqueue_item(initial_task);
-    });
-    // maybe it is reasonable to start threads with little relative
-    // time difference rather then all at once?
-    fence(Ordering::Release);
-    for _ in 0 .. thread_count {
-      let queue_ref = &mut *q_ptr ;
-      let stop_flag_ref = &data.was_signaled_to_stop;
-      let threads_ptr = addr_of_mut!(data.executors) as usize;
-      let lc = &data.liveness_count;
-      let thread = spawn(move || {
-        task_processor_runloop::<4>(
-          stop_flag_ref, queue_ref,
-          threads_ptr as *mut _, lc);
-      });
-      threads.push(thread);
-    }
-    addr_of_mut!(data.executors).write(threads);
-    return WorkGroupRef(transmute(wg));
-  } }
-  pub fn init2(work_graph: ActionLink) -> WorkGroupRef {
+pub struct WorkGroup(Box<WorkGroupSharedData>);
+impl WorkGroup {
+  pub fn init(work_graph: ActionLink) -> WorkGroup {
     unsafe {
       let core_ids = core_affinity::get_core_ids();
       if let None = core_ids {
@@ -433,7 +398,7 @@ impl WorkGroupRef {
       let core_ids = core_ids.unwrap();
       let core_count = core_ids.len() as u16;
       let mut wg =
-        Box::<MaybeUninit<WorkGroup>>::new(MaybeUninit::uninit());
+        Box::<MaybeUninit<WorkGroupSharedData>>::new(MaybeUninit::uninit());
       let data = &mut *wg.as_mut_ptr() ;
       data.was_signaled_to_stop.store(false, Ordering::Relaxed);
       data.liveness_count.store(core_count, Ordering::Relaxed);
@@ -447,28 +412,30 @@ impl WorkGroupRef {
       wg.assume_init_mut().task_queue.with_acquired_queue(|queue|{
         queue.enqueue_item(initial_task);
       });
+      addr_of_mut!(data.initiator_thread).write(thread::current());
       // maybe it is reasonable to start threads with little relative
       // time difference rather then all at once?
       fence(Ordering::Release);
       for core_id in core_ids {
         let queue_ref = &mut *q_ptr ;
         let stop_flag_ref = &data.was_signaled_to_stop;
-        let threads_ptr = addr_of_mut!(data.executors) as usize;
+        let threads_ptr = addr_of_mut!(data.delegated_executors) as usize;
         let lc = &data.liveness_count;
+        let init_thread = &data.initiator_thread;
         let thread = spawn(move || {
           core_affinity::set_for_current(core_id);
           task_processor_runloop::<4>(
             stop_flag_ref, queue_ref,
-            threads_ptr as *mut _, lc);
+            threads_ptr as *mut _, lc, init_thread);
         });
         threads.push(thread);
       }
-      addr_of_mut!(data.executors).write(threads);
-      return WorkGroupRef(transmute(wg));
+      addr_of_mut!(data.delegated_executors).write(threads);
+      return WorkGroup(transmute(wg));
     } }
   pub fn await_completion(self) {
-    yield_now(); // most likely a good descision
-    for thread in self.0.executors {
+    park();
+    for thread in self.0.delegated_executors {
       let _ = thread.join().unwrap();
     }
   }

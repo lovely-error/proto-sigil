@@ -5,7 +5,7 @@ use proto_sigil::support_structures::tagged_ptr::TaggedPtr;
 
 
 #[test]
-fn ptr_works_triv () {
+fn encode_decode_ptr () {
   #[repr(packed)]
   #[derive(Copy, Clone, Debug, PartialEq)]
   struct Tag {
@@ -54,3 +54,4 @@ fn ptr_jections () {
   assert!(tptr.project_tag() == flag);
   assert!(tptr.project_ptr() == fake_ptr);
 }
+

@@ -6,7 +6,7 @@ use proto_sigil::{
 fn qc () {
   let mut iv = InlineVector::<4, u64>::init();
   for i in 510 .. 515 {
-    iv.append(i);
+    iv.push(i);
   }
   let mut lq = LoopQueue::<u64>::init_new();
   for i in 0 .. 510 {
@@ -20,7 +20,7 @@ fn qc () {
 
   let mut iv = InlineVector::<4, u64>::init();
   for i in 0 .. 8 {
-    iv.append(i);
+    iv.push(i);
   }
   let mut lq = LoopQueue::<u64>::init_new();
 

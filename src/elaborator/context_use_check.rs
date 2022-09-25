@@ -24,11 +24,11 @@ pub fn check_context_use(
   if let Some(ctx) = implicit_context {
     let ptr = ctx.project_ptr();
     let lim = ctx.project_count();
-    for i in 0 .. lim {
+    for i in 0 .. lim as usize {
       let (symbol, _) = unsafe { *ptr.add(i) };
       encounted_items.insert(symbol);
     }
-    for i in 0 .. lim {
+    for i in 0 .. lim as usize {
       let (_, expr) = unsafe { *ptr.add(i) };
       if let Some(expr) = expr {
         check_context_use(
@@ -56,7 +56,7 @@ pub fn check_context_use(
       encounted_items.remove(&root);
       let ptr = arguments.project_ptr();
       let lim = arguments.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let ptr = unsafe { *ptr.add(i) };
         check_context_use(
           ptr, diagnostic_service, encounted_items);
@@ -65,7 +65,7 @@ pub fn check_context_use(
     ConcretisedNodeRepr::Wit { premises, conclusion } => {
       let ptr = premises.project_ptr();
       let lim = premises.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let ptr = unsafe { *ptr.add(i) };
         check_context_use(
           ptr, diagnostic_service, encounted_items);
@@ -78,7 +78,7 @@ pub fn check_context_use(
     ConcretisedNodeRepr::Arrow { head, spine, .. } => {
       let ptr = head.project_ptr();
       let lim = head.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let (_, expr) = unsafe { *ptr.add(i) };
         check_context_use(
           expr, diagnostic_service, encounted_items);
@@ -89,7 +89,7 @@ pub fn check_context_use(
     ConcretisedNodeRepr::Lam { rewrite_rules } => {
       let ptr = rewrite_rules.project_ptr();
       let lim = rewrite_rules.project_count();
-      for i in 0 .. lim {
+      for i in 0 .. lim as usize {
         let ConcretisedRewriteRule { rhs: lhs, .. }
         = unsafe { *ptr.add(i) };
         check_context_use(
